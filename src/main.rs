@@ -25,6 +25,8 @@ const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
 const DUPLICATE_ADVANCE_GRACE: Duration = Duration::from_millis(45);
+const CROSS_SOURCE_DUPLICATE_GRACE: Duration = Duration::from_millis(120);
+const INITIAL_KEYBOARD_SUPPRESSION_GRACE: Duration = Duration::from_millis(250);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -128,6 +130,18 @@ enum IpcCommand {
     OpenFromKeyboard(OpenRequest),
     Close,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdvanceSource {
+    Binding,
+    Keyboard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AdvanceRecord {
+    at: Instant,
+    source: AdvanceSource,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -292,7 +306,8 @@ struct SwitcherState {
     selected: usize,
     open: bool,
     pending_close_until: Option<Instant>,
-    last_advance_at: Option<Instant>,
+    last_advance: Option<AdvanceRecord>,
+    suppress_keyboard_advance_until: Option<Instant>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -410,7 +425,8 @@ fn run_daemon() -> Result<()> {
             selected: 0,
             open: false,
             pending_close_until: None,
-            last_advance_at: None,
+            last_advance: None,
+            suppress_keyboard_advance_until: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -474,6 +490,21 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     controller.connect_key_released(move |_, key, _, _| {
         if matches!(
             key,
+            gdk::Key::Tab
+                | gdk::Key::ISO_Left_Tab
+                | gdk::Key::Right
+                | gdk::Key::Left
+                | gdk::Key::l
+                | gdk::Key::h
+                | gdk::Key::grave
+        ) {
+            state_released
+                .borrow_mut()
+                .clear_keyboard_advance_suppression();
+        }
+
+        if matches!(
+            key,
             gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
         ) {
             state_released.borrow_mut().handle(IpcCommand::Close);
@@ -486,21 +517,26 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
 impl SwitcherState {
     fn handle(&mut self, command: IpcCommand) {
         match command {
-            IpcCommand::Open(request) | IpcCommand::OpenFromKeyboard(request) => {
-                self.open_or_advance(request)
+            IpcCommand::Open(request) => self.open_or_advance(request, AdvanceSource::Binding),
+            IpcCommand::OpenFromKeyboard(request) => {
+                self.open_or_advance(request, AdvanceSource::Keyboard)
             }
             IpcCommand::Close => self.close(true),
             IpcCommand::Cancel => self.close(false),
         }
     }
 
-    fn open_or_advance(&mut self, request: OpenRequest) {
+    fn open_or_advance(&mut self, request: OpenRequest, source: AdvanceSource) {
+        let now = Instant::now();
+
         if self.open {
-            let now = Instant::now();
-            if is_duplicate_advance(self.last_advance_at, now) {
+            if source == AdvanceSource::Keyboard && self.consume_keyboard_advance_suppression(now) {
                 return;
             }
-            self.last_advance_at = Some(now);
+            if is_duplicate_advance(self.last_advance, now, source) {
+                return;
+            }
+            self.last_advance = Some(AdvanceRecord { at: now, source });
             self.advance(request.direction);
             self.render();
             return;
@@ -513,7 +549,9 @@ impl SwitcherState {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
-                self.last_advance_at = Some(Instant::now());
+                self.last_advance = Some(AdvanceRecord { at: now, source });
+                self.suppress_keyboard_advance_until = (source == AdvanceSource::Binding)
+                    .then_some(now + INITIAL_KEYBOARD_SUPPRESSION_GRACE);
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -525,6 +563,19 @@ impl SwitcherState {
             Ok(_) => {}
             Err(err) => eprintln!("omarchy-window-switcher: failed to collect items: {err:#}"),
         }
+    }
+
+    fn consume_keyboard_advance_suppression(&mut self, now: Instant) -> bool {
+        if is_keyboard_advance_suppressed(self.suppress_keyboard_advance_until, now) {
+            return true;
+        }
+
+        self.suppress_keyboard_advance_until = None;
+        false
+    }
+
+    fn clear_keyboard_advance_suppression(&mut self) {
+        self.suppress_keyboard_advance_until = None;
     }
 
     fn advance(&mut self, direction: Direction) {
@@ -554,7 +605,8 @@ impl SwitcherState {
         }
 
         self.pending_close_until = None;
-        self.last_advance_at = None;
+        self.last_advance = None;
+        self.suppress_keyboard_advance_until = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
@@ -605,8 +657,23 @@ fn initial_selection(len: usize, direction: Direction) -> usize {
     }
 }
 
-fn is_duplicate_advance(last_advance_at: Option<Instant>, now: Instant) -> bool {
-    last_advance_at.is_some_and(|last| now.duration_since(last) < DUPLICATE_ADVANCE_GRACE)
+fn is_duplicate_advance(
+    last_advance: Option<AdvanceRecord>,
+    now: Instant,
+    source: AdvanceSource,
+) -> bool {
+    last_advance.is_some_and(|last| {
+        let grace = if last.source == source {
+            DUPLICATE_ADVANCE_GRACE
+        } else {
+            CROSS_SOURCE_DUPLICATE_GRACE
+        };
+        now.duration_since(last.at) < grace
+    })
+}
+
+fn is_keyboard_advance_suppressed(until: Option<Instant>, now: Instant) -> bool {
+    until.is_some_and(|deadline| now <= deadline)
 }
 
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
@@ -1301,16 +1368,52 @@ mod tests {
     #[test]
     fn duplicate_advance_guard_catches_initial_overlay_key_event() {
         let opened_at = Instant::now();
+        let binding_advance = AdvanceRecord {
+            at: opened_at,
+            source: AdvanceSource::Binding,
+        };
 
         assert!(is_duplicate_advance(
-            Some(opened_at),
-            opened_at + Duration::from_millis(20)
+            Some(binding_advance),
+            opened_at + Duration::from_millis(20),
+            AdvanceSource::Binding
         ));
         assert!(!is_duplicate_advance(
-            Some(opened_at),
-            opened_at + DUPLICATE_ADVANCE_GRACE + Duration::from_millis(1)
+            Some(binding_advance),
+            opened_at + DUPLICATE_ADVANCE_GRACE + Duration::from_millis(1),
+            AdvanceSource::Binding
         ));
-        assert!(!is_duplicate_advance(None, opened_at));
+        assert!(is_duplicate_advance(
+            Some(binding_advance),
+            opened_at + Duration::from_millis(80),
+            AdvanceSource::Keyboard
+        ));
+        assert!(!is_duplicate_advance(
+            Some(binding_advance),
+            opened_at + CROSS_SOURCE_DUPLICATE_GRACE + Duration::from_millis(1),
+            AdvanceSource::Keyboard
+        ));
+        assert!(!is_duplicate_advance(
+            None,
+            opened_at,
+            AdvanceSource::Keyboard
+        ));
+    }
+
+    #[test]
+    fn keyboard_advance_suppression_expires_or_clears() {
+        let opened_at = Instant::now();
+        let deadline = opened_at + INITIAL_KEYBOARD_SUPPRESSION_GRACE;
+
+        assert!(is_keyboard_advance_suppressed(
+            Some(deadline),
+            opened_at + Duration::from_millis(20)
+        ));
+        assert!(!is_keyboard_advance_suppressed(
+            Some(deadline),
+            deadline + Duration::from_millis(1)
+        ));
+        assert!(!is_keyboard_advance_suppressed(None, opened_at));
     }
 
     #[test]

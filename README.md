@@ -162,10 +162,10 @@ unbind = ALT SHIFT, TAB
 unbind = SUPER, TAB
 unbind = SUPER SHIFT, TAB
 
-binded = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt next
-binded = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt prev
-binded = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super next
-binded = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super prev
+bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt next
+bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt prev
+bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super next
+bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super prev
 
 binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
 binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
