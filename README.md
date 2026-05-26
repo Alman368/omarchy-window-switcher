@@ -171,32 +171,6 @@ binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/om
 binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
 binddrt = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
 binddrt = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-
-bind = ALT, TAB, submap, omarchy-window-switcher
-bind = ALT SHIFT, TAB, submap, omarchy-window-switcher
-bind = SUPER, TAB, submap, omarchy-window-switcher
-bind = SUPER SHIFT, TAB, submap, omarchy-window-switcher
-
-submap = omarchy-window-switcher
-bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt next
-bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt prev
-bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super next
-bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super prev
-bindd = , RIGHT, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt next
-bindd = , LEFT, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt prev
-bindd = , ESCAPE, Window switcher cancel, exec, /home/your-user/.local/bin/omarchy-window-switcher cancel
-bind = , ESCAPE, submap, reset
-bindd = , RETURN, Window switcher accept, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-bind = , RETURN, submap, reset
-binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-bindr = ALT, Alt_L, submap, reset
-binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-bindr = ALT, Alt_R, submap, reset
-binddrt = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-bindr = SUPER, Super_L, submap, reset
-binddrt = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-bindr = SUPER, Super_R, submap, reset
-submap = reset
 ```
 
 ## Desarrollo
