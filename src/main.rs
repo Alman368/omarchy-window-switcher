@@ -17,11 +17,12 @@ use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
+const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -173,6 +174,7 @@ struct SwitcherState {
     windows: Vec<WindowInfo>,
     selected: usize,
     open: bool,
+    pending_close_until: Option<Instant>,
 }
 
 fn default_true() -> bool {
@@ -263,6 +265,7 @@ fn run_daemon() -> Result<()> {
             windows: Vec::new(),
             selected: 0,
             open: false,
+            pending_close_until: None,
         }));
 
         setup_keyboard_controller(&window, Rc::clone(&state));
@@ -343,6 +346,9 @@ impl SwitcherState {
                 self.render();
                 self.window.present();
                 self.window.grab_focus();
+                if self.consume_pending_close() {
+                    self.close(true);
+                }
             }
             Ok(_) => {}
             Err(err) => eprintln!("omarchy-window-switcher: failed to collect windows: {err:#}"),
@@ -369,9 +375,13 @@ impl SwitcherState {
 
     fn close(&mut self, should_focus: bool) {
         if !self.open {
+            if should_focus {
+                self.pending_close_until = Some(Instant::now() + CLOSE_RACE_GRACE);
+            }
             return;
         }
 
+        self.pending_close_until = None;
         self.open = false;
         self.window.set_visible(false);
 
@@ -380,11 +390,20 @@ impl SwitcherState {
         self.windows.clear();
         self.selected = 0;
 
-        if should_focus && let Some(window) = selected {
-            if let Err(err) = focus_window(&window) {
-                eprintln!("omarchy-window-switcher: failed to focus window: {err:#}");
-            }
+        if should_focus
+            && let Some(window) = selected
+            && let Err(err) = focus_window(&window)
+        {
+            eprintln!("omarchy-window-switcher: failed to focus window: {err:#}");
         }
+    }
+
+    fn consume_pending_close(&mut self) -> bool {
+        let Some(deadline) = self.pending_close_until.take() else {
+            return false;
+        };
+
+        Instant::now() <= deadline
     }
 
     fn render(&self) {
