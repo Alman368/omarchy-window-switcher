@@ -27,10 +27,10 @@ binded = ALT SHIFT, TAB, Window switcher previous, exec, $bindir/omarchy-window-
 binded = SUPER, TAB, Window switcher workspace next, exec, $bindir/omarchy-window-switcher open --profile super next
 binded = SUPER SHIFT, TAB, Window switcher workspace previous, exec, $bindir/omarchy-window-switcher open --profile super prev
 
-binddr = ALT, Alt_L, Window switcher close, exec, $bindir/omarchy-window-switcher close
-binddr = ALT, Alt_R, Window switcher close, exec, $bindir/omarchy-window-switcher close
-binddr = SUPER, Super_L, Window switcher close, exec, $bindir/omarchy-window-switcher close
-binddr = SUPER, Super_R, Window switcher close, exec, $bindir/omarchy-window-switcher close
+binddrt = ALT, Alt_L, Window switcher close, exec, $bindir/omarchy-window-switcher close
+binddrt = ALT, Alt_R, Window switcher close, exec, $bindir/omarchy-window-switcher close
+binddrt = SUPER, Super_L, Window switcher close, exec, $bindir/omarchy-window-switcher close
+binddrt = SUPER, Super_R, Window switcher close, exec, $bindir/omarchy-window-switcher close
 
 Optional:
 bindd = SUPER, GRAVE, Window switcher cancel, exec, $bindir/omarchy-window-switcher cancel

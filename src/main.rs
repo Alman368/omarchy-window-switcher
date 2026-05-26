@@ -24,7 +24,6 @@ const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
-const MODIFIER_POLL_GRACE: Duration = Duration::from_millis(45);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -265,7 +264,6 @@ struct SwitcherState {
     open: bool,
     pending_close_until: Option<Instant>,
     active_profile: Option<Profile>,
-    opened_at: Option<Instant>,
     config: AppConfig,
 }
 
@@ -379,7 +377,6 @@ fn run_daemon() -> Result<()> {
             open: false,
             pending_close_until: None,
             active_profile: None,
-            opened_at: None,
             config: load_config(),
         }));
 
@@ -389,7 +386,6 @@ fn run_daemon() -> Result<()> {
             while let Ok(command) = rx.try_recv() {
                 state.borrow_mut().handle(command);
             }
-            state.borrow_mut().close_if_modifier_released();
             ControlFlow::Continue
         });
     });
@@ -476,11 +472,10 @@ impl SwitcherState {
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
                 self.active_profile = Some(request.profile);
-                self.opened_at = Some(Instant::now());
                 self.render();
                 self.window.present();
                 self.window.grab_focus();
-                if self.consume_pending_close() || !modifier_is_active(request.profile) {
+                if self.consume_pending_close() {
                     self.close(true);
                 }
             }
@@ -517,7 +512,6 @@ impl SwitcherState {
 
         self.pending_close_until = None;
         self.active_profile = None;
-        self.opened_at = None;
         self.open = false;
         self.window.set_visible(false);
 
@@ -540,25 +534,6 @@ impl SwitcherState {
         };
 
         Instant::now() <= deadline
-    }
-
-    fn close_if_modifier_released(&mut self) {
-        if !self.open {
-            return;
-        }
-
-        if self
-            .opened_at
-            .is_some_and(|opened_at| opened_at.elapsed() < MODIFIER_POLL_GRACE)
-        {
-            return;
-        }
-
-        if let Some(profile) = self.active_profile
-            && !modifier_is_active(profile)
-        {
-            self.close(true);
-        }
     }
 
     fn render(&self) {
@@ -732,24 +707,6 @@ fn icon_name(class_name: &str) -> &'static str {
         "spotify" => "spotify",
         "obsidian" => "obsidian",
         _ => "application-x-executable",
-    }
-}
-
-fn modifier_is_active(profile: Profile) -> bool {
-    let Some(display) = gdk::Display::default() else {
-        return true;
-    };
-    let Some(seat) = display.default_seat() else {
-        return true;
-    };
-    let Some(keyboard) = seat.keyboard() else {
-        return true;
-    };
-
-    let state = keyboard.modifier_state();
-    match profile {
-        Profile::Alt => state.contains(gdk::ModifierType::ALT_MASK),
-        Profile::Super => state.contains(gdk::ModifierType::SUPER_MASK),
     }
 }
 
