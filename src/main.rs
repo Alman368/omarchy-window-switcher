@@ -24,6 +24,7 @@ const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
+const DUPLICATE_ADVANCE_GRACE: Duration = Duration::from_millis(45);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -124,6 +125,7 @@ enum Direction {
 #[derive(Debug, Clone, Copy)]
 enum IpcCommand {
     Open(OpenRequest),
+    OpenFromKeyboard(OpenRequest),
     Close,
     Cancel,
 }
@@ -290,6 +292,7 @@ struct SwitcherState {
     selected: usize,
     open: bool,
     pending_close_until: Option<Instant>,
+    last_advance_at: Option<Instant>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -407,6 +410,7 @@ fn run_daemon() -> Result<()> {
             selected: 0,
             open: false,
             pending_close_until: None,
+            last_advance_at: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -436,7 +440,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .unwrap_or(Profile::Alt);
             state_pressed
                 .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+                .handle(IpcCommand::OpenFromKeyboard(OpenRequest {
                     profile,
                     direction: Direction::Next,
                 }));
@@ -449,7 +453,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .unwrap_or(Profile::Alt);
             state_pressed
                 .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+                .handle(IpcCommand::OpenFromKeyboard(OpenRequest {
                     profile,
                     direction: Direction::Prev,
                 }));
@@ -482,7 +486,9 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
 impl SwitcherState {
     fn handle(&mut self, command: IpcCommand) {
         match command {
-            IpcCommand::Open(request) => self.open_or_advance(request),
+            IpcCommand::Open(request) | IpcCommand::OpenFromKeyboard(request) => {
+                self.open_or_advance(request)
+            }
             IpcCommand::Close => self.close(true),
             IpcCommand::Cancel => self.close(false),
         }
@@ -490,6 +496,14 @@ impl SwitcherState {
 
     fn open_or_advance(&mut self, request: OpenRequest) {
         if self.open {
+            let now = Instant::now();
+            if self
+                .last_advance_at
+                .is_some_and(|last| now.duration_since(last) < DUPLICATE_ADVANCE_GRACE)
+            {
+                return;
+            }
+            self.last_advance_at = Some(now);
             self.advance(request.direction);
             self.render();
             return;
@@ -502,6 +516,7 @@ impl SwitcherState {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
+                self.last_advance_at = None;
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -542,6 +557,7 @@ impl SwitcherState {
         }
 
         self.pending_close_until = None;
+        self.last_advance_at = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
@@ -1169,16 +1185,32 @@ fn ipc_payload(command: IpcCommand) -> &'static str {
         IpcCommand::Open(OpenRequest {
             profile: Profile::Alt,
             direction: Direction::Next,
+        })
+        | IpcCommand::OpenFromKeyboard(OpenRequest {
+            profile: Profile::Alt,
+            direction: Direction::Next,
         }) => "open alt next\n",
         IpcCommand::Open(OpenRequest {
+            profile: Profile::Alt,
+            direction: Direction::Prev,
+        })
+        | IpcCommand::OpenFromKeyboard(OpenRequest {
             profile: Profile::Alt,
             direction: Direction::Prev,
         }) => "open alt prev\n",
         IpcCommand::Open(OpenRequest {
             profile: Profile::Super,
             direction: Direction::Next,
+        })
+        | IpcCommand::OpenFromKeyboard(OpenRequest {
+            profile: Profile::Super,
+            direction: Direction::Next,
         }) => "open super next\n",
         IpcCommand::Open(OpenRequest {
+            profile: Profile::Super,
+            direction: Direction::Prev,
+        })
+        | IpcCommand::OpenFromKeyboard(OpenRequest {
             profile: Profile::Super,
             direction: Direction::Prev,
         }) => "open super prev\n",
