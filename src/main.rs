@@ -26,7 +26,6 @@ const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
 const DUPLICATE_ADVANCE_GRACE: Duration = Duration::from_millis(45);
 const CROSS_SOURCE_DUPLICATE_GRACE: Duration = Duration::from_millis(120);
-const INITIAL_KEYBOARD_SUPPRESSION_GRACE: Duration = Duration::from_millis(250);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -307,7 +306,6 @@ struct SwitcherState {
     open: bool,
     pending_close_until: Option<Instant>,
     last_advance: Option<AdvanceRecord>,
-    suppress_keyboard_advance_until: Option<Instant>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -426,7 +424,6 @@ fn run_daemon() -> Result<()> {
             open: false,
             pending_close_until: None,
             last_advance: None,
-            suppress_keyboard_advance_until: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -490,21 +487,6 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     controller.connect_key_released(move |_, key, _, _| {
         if matches!(
             key,
-            gdk::Key::Tab
-                | gdk::Key::ISO_Left_Tab
-                | gdk::Key::Right
-                | gdk::Key::Left
-                | gdk::Key::l
-                | gdk::Key::h
-                | gdk::Key::grave
-        ) {
-            state_released
-                .borrow_mut()
-                .clear_keyboard_advance_suppression();
-        }
-
-        if matches!(
-            key,
             gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
         ) {
             state_released.borrow_mut().handle(IpcCommand::Close);
@@ -530,9 +512,6 @@ impl SwitcherState {
         let now = Instant::now();
 
         if self.open {
-            if source == AdvanceSource::Keyboard && self.consume_keyboard_advance_suppression(now) {
-                return;
-            }
             if is_duplicate_advance(self.last_advance, now, source) {
                 return;
             }
@@ -550,8 +529,6 @@ impl SwitcherState {
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
                 self.last_advance = Some(AdvanceRecord { at: now, source });
-                self.suppress_keyboard_advance_until = (source == AdvanceSource::Binding)
-                    .then_some(now + INITIAL_KEYBOARD_SUPPRESSION_GRACE);
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -563,19 +540,6 @@ impl SwitcherState {
             Ok(_) => {}
             Err(err) => eprintln!("omarchy-window-switcher: failed to collect items: {err:#}"),
         }
-    }
-
-    fn consume_keyboard_advance_suppression(&mut self, now: Instant) -> bool {
-        if is_keyboard_advance_suppressed(self.suppress_keyboard_advance_until, now) {
-            return true;
-        }
-
-        self.suppress_keyboard_advance_until = None;
-        false
-    }
-
-    fn clear_keyboard_advance_suppression(&mut self) {
-        self.suppress_keyboard_advance_until = None;
     }
 
     fn advance(&mut self, direction: Direction) {
@@ -606,7 +570,6 @@ impl SwitcherState {
 
         self.pending_close_until = None;
         self.last_advance = None;
-        self.suppress_keyboard_advance_until = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
@@ -670,10 +633,6 @@ fn is_duplicate_advance(
         };
         now.duration_since(last.at) < grace
     })
-}
-
-fn is_keyboard_advance_suppressed(until: Option<Instant>, now: Instant) -> bool {
-    until.is_some_and(|deadline| now <= deadline)
 }
 
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
@@ -753,9 +712,9 @@ impl SwitchItem {
         match self {
             Self::Window(window) => {
                 if window.pinned {
-                    format!("ws {} - pinned", window.workspace_name)
+                    format!("window | ws {} | pinned", window.workspace_name)
                 } else {
-                    format!("ws {}", window.workspace_name)
+                    format!("window | ws {}", window.workspace_name)
                 }
             }
             Self::Workspace(workspace) => {
@@ -764,7 +723,10 @@ impl SwitchItem {
                 } else {
                     "windows"
                 };
-                format!("ws {} - {} {}", workspace.name, workspace.windows, count)
+                format!(
+                    "workspace | ws {} | {} {}",
+                    workspace.name, workspace.windows, count
+                )
             }
             Self::Monitor(monitor) => format!("ws {}", monitor.active_workspace_name),
         }
@@ -1398,22 +1360,6 @@ mod tests {
             opened_at,
             AdvanceSource::Keyboard
         ));
-    }
-
-    #[test]
-    fn keyboard_advance_suppression_expires_or_clears() {
-        let opened_at = Instant::now();
-        let deadline = opened_at + INITIAL_KEYBOARD_SUPPRESSION_GRACE;
-
-        assert!(is_keyboard_advance_suppressed(
-            Some(deadline),
-            opened_at + Duration::from_millis(20)
-        ));
-        assert!(!is_keyboard_advance_suppressed(
-            Some(deadline),
-            deadline + Duration::from_millis(1)
-        ));
-        assert!(!is_keyboard_advance_suppressed(None, opened_at));
     }
 
     #[test]
