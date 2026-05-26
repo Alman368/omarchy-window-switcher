@@ -73,10 +73,14 @@ El comportamiento por defecto es:
 [alt]
 target = "windows"
 scope = "all"
+same_class = false
+include_special_workspaces = false
 
 [super]
 target = "workspaces"
 scope = "current-monitor"
+include_empty_workspaces = false
+include_special_workspaces = false
 ```
 
 Para cambiarlo, copia `config.example.toml` a:
@@ -87,15 +91,59 @@ Para cambiarlo, copia `config.example.toml` a:
 
 Valores soportados:
 
-- `target`: `windows`, `workspaces`
+- `target`: `windows`, `workspaces`, `monitors`
 - `scope`: `all`, `current-workspace`, `current-monitor`
+- `same_class`: `true` para limitar ventanas a la misma app/clase
+- `include_special_workspaces`: `true` para incluir scratchpads/special workspaces
+- `include_empty_workspaces`: `true` para incluir workspaces sin ventanas al usar `target = "workspaces"`
 
-Para limitar `ALT+TAB` al workspace actual:
+Configuraciones habituales:
 
 ```toml
+# Nuestro uso: Alt-Tab global entre ventanas, Super-Tab entre workspaces del monitor actual.
+[alt]
+target = "windows"
+scope = "all"
+
+[super]
+target = "workspaces"
+scope = "current-monitor"
+```
+
+```toml
+# Super-Tab entre ventanas del workspace actual.
+[super]
+target = "windows"
+scope = "current-workspace"
+```
+
+```toml
+# Alt-Tab limitado al workspace actual.
 [alt]
 target = "windows"
 scope = "current-workspace"
+```
+
+```toml
+# Alt-Tab entre ventanas del monitor actual.
+[alt]
+target = "windows"
+scope = "current-monitor"
+```
+
+```toml
+# Cambiar solo entre ventanas de la misma app.
+[alt]
+target = "windows"
+scope = "all"
+same_class = true
+```
+
+```toml
+# Super-Tab entre monitores.
+[super]
+target = "monitors"
+scope = "all"
 ```
 
 ## Hyprland

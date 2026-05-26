@@ -140,6 +140,7 @@ enum Target {
     #[default]
     Windows,
     Workspaces,
+    Monitors,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -156,6 +157,9 @@ enum Scope {
 struct ProfileSettings {
     target: Target,
     scope: Scope,
+    same_class: bool,
+    include_special_workspaces: bool,
+    include_empty_workspaces: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -198,6 +202,20 @@ struct HyprClient {
     focus_history_id: Option<i64>,
     #[serde(default)]
     pinned: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HyprMonitorInfo {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "activeWorkspace")]
+    active_workspace: HyprWorkspace,
+    #[serde(default)]
+    focused: bool,
+    #[serde(default)]
+    disabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -251,9 +269,18 @@ struct WorkspaceInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct MonitorInfo {
+    id: i64,
+    name: String,
+    active_workspace_name: String,
+    focused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SwitchItem {
     Window(WindowInfo),
     Workspace(WorkspaceInfo),
+    Monitor(MonitorInfo),
 }
 
 struct SwitcherState {
@@ -276,6 +303,9 @@ impl Default for ProfileSettings {
         Self {
             target: Target::Windows,
             scope: Scope::All,
+            same_class: false,
+            include_special_workspaces: false,
+            include_empty_workspaces: false,
         }
     }
 }
@@ -286,10 +316,16 @@ impl Default for AppConfig {
             alt: ProfileSettings {
                 target: Target::Windows,
                 scope: Scope::All,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
             },
             super_profile: ProfileSettings {
                 target: Target::Workspaces,
                 scope: Scope::CurrentMonitor,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
             },
         }
     }
@@ -609,6 +645,7 @@ impl SwitchItem {
         match self {
             Self::Window(window) => window.display_name(),
             Self::Workspace(workspace) => workspace.display_name(),
+            Self::Monitor(monitor) => monitor.display_name(),
         }
     }
 
@@ -616,6 +653,7 @@ impl SwitchItem {
         match self {
             Self::Window(window) => window.short_title(),
             Self::Workspace(workspace) => workspace.short_title(),
+            Self::Monitor(monitor) => monitor.short_title(),
         }
     }
 
@@ -623,6 +661,7 @@ impl SwitchItem {
         match self {
             Self::Window(window) => app_display_name(&window.wm_class).to_string(),
             Self::Workspace(workspace) => format!("Workspace {}", workspace.name),
+            Self::Monitor(_) => "Monitor".to_string(),
         }
     }
 
@@ -643,6 +682,7 @@ impl SwitchItem {
                 };
                 format!("ws {} - {} {}", workspace.name, workspace.windows, count)
             }
+            Self::Monitor(monitor) => format!("ws {}", monitor.active_workspace_name),
         }
     }
 
@@ -650,6 +690,7 @@ impl SwitchItem {
         match self {
             Self::Window(window) => icon_name(&window.wm_class),
             Self::Workspace(_) => "view-grid-symbolic",
+            Self::Monitor(_) => "video-display-symbolic",
         }
     }
 }
@@ -697,6 +738,19 @@ impl WorkspaceInfo {
         } else {
             clean_display_title(&self.last_title)
         }
+    }
+}
+
+impl MonitorInfo {
+    fn display_name(&self) -> String {
+        format!(
+            "Monitor {}: workspace {}",
+            self.name, self.active_workspace_name
+        )
+    }
+
+    fn short_title(&self) -> String {
+        self.name.clone()
     }
 }
 
@@ -776,14 +830,16 @@ fn config_path() -> PathBuf {
 
 fn collect_items(settings: ProfileSettings) -> Result<Vec<SwitchItem>> {
     match settings.target {
-        Target::Windows => collect_windows(settings.scope)
+        Target::Windows => collect_windows(settings)
             .map(|windows| windows.into_iter().map(SwitchItem::Window).collect()),
-        Target::Workspaces => collect_workspaces(settings.scope)
+        Target::Workspaces => collect_workspaces(settings)
             .map(|workspaces| workspaces.into_iter().map(SwitchItem::Workspace).collect()),
+        Target::Monitors => collect_monitors()
+            .map(|monitors| monitors.into_iter().map(SwitchItem::Monitor).collect()),
     }
 }
 
-fn collect_windows(scope: Scope) -> Result<Vec<WindowInfo>> {
+fn collect_windows(settings: ProfileSettings) -> Result<Vec<WindowInfo>> {
     let clients: Vec<HyprClient> = hyprctl_json(&["clients", "-j"])?;
     let active: Option<HyprActiveWindow> = hyprctl_json(&["activewindow", "-j"]).ok();
     let active_workspace: Option<HyprActiveWorkspace> =
@@ -793,6 +849,12 @@ fn collect_windows(scope: Scope) -> Result<Vec<WindowInfo>> {
     let active_monitor_id = active_workspace
         .as_ref()
         .map(|workspace| workspace.monitor_id);
+    let active_class = active_address.as_ref().and_then(|active_address| {
+        clients
+            .iter()
+            .find(|client| &client.address == active_address)
+            .map(client_class)
+    });
 
     let mut windows = clients
         .into_iter()
@@ -801,8 +863,12 @@ fn collect_windows(scope: Scope) -> Result<Vec<WindowInfo>> {
                 && client.mapped
                 && !client.hidden
                 && client.accepts_input
-                && client.workspace.id >= 0
-                && scope.includes(
+                && (settings.include_special_workspaces || client.workspace.id >= 0)
+                && (!settings.same_class
+                    || active_class
+                        .as_ref()
+                        .is_some_and(|active_class| client_class(client) == *active_class))
+                && settings.scope.includes(
                     client.workspace.id,
                     client.monitor,
                     active_workspace_id,
@@ -812,11 +878,7 @@ fn collect_windows(scope: Scope) -> Result<Vec<WindowInfo>> {
         .map(|client| WindowInfo {
             address: client.address,
             title: strip_markup(&client.title),
-            wm_class: if client.wm_class.trim().is_empty() {
-                client.initial_class
-            } else {
-                client.wm_class
-            },
+            wm_class: resolved_class(client.wm_class, client.initial_class),
             workspace_id: client.workspace.id,
             workspace_name: if client.workspace.name.is_empty() {
                 client.workspace.id.to_string()
@@ -848,8 +910,14 @@ fn collect_windows(scope: Scope) -> Result<Vec<WindowInfo>> {
     Ok(windows)
 }
 
-fn collect_workspaces(scope: Scope) -> Result<Vec<WorkspaceInfo>> {
-    let clients = collect_windows(Scope::All)?;
+fn collect_workspaces(settings: ProfileSettings) -> Result<Vec<WorkspaceInfo>> {
+    let clients = collect_windows(ProfileSettings {
+        target: Target::Windows,
+        scope: Scope::All,
+        same_class: false,
+        include_special_workspaces: settings.include_special_workspaces,
+        include_empty_workspaces: false,
+    })?;
     let workspaces: Vec<HyprWorkspaceInfo> = hyprctl_json(&["workspaces", "-j"])?;
     let active_workspace: HyprActiveWorkspace = hyprctl_json(&["activeworkspace", "-j"])?;
     let active_workspace_id = Some(active_workspace.id);
@@ -866,9 +934,9 @@ fn collect_workspaces(scope: Scope) -> Result<Vec<WorkspaceInfo>> {
     let mut items = workspaces
         .into_iter()
         .filter(|workspace| {
-            workspace.id >= 0
-                && workspace.windows > 0
-                && scope.includes(
+            (settings.include_special_workspaces || workspace.id >= 0)
+                && (settings.include_empty_workspaces || workspace.windows > 0)
+                && settings.scope.includes(
                     workspace.id,
                     workspace.monitor_id,
                     active_workspace_id,
@@ -909,6 +977,48 @@ fn collect_workspaces(scope: Scope) -> Result<Vec<WorkspaceInfo>> {
     Ok(items)
 }
 
+fn collect_monitors() -> Result<Vec<MonitorInfo>> {
+    let mut monitors = hyprctl_json::<Vec<HyprMonitorInfo>>(&["monitors", "-j"])?
+        .into_iter()
+        .filter(|monitor| !monitor.disabled && !monitor.name.is_empty())
+        .map(|monitor| MonitorInfo {
+            id: monitor.id,
+            name: monitor.name,
+            active_workspace_name: if monitor.active_workspace.name.is_empty() {
+                monitor.active_workspace.id.to_string()
+            } else {
+                monitor.active_workspace.name
+            },
+            focused: monitor.focused,
+        })
+        .collect::<Vec<_>>();
+
+    monitors.sort_by(|a, b| {
+        b.focused
+            .cmp(&a.focused)
+            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(monitors)
+}
+
+fn resolved_class(wm_class: String, initial_class: String) -> String {
+    if wm_class.trim().is_empty() {
+        initial_class
+    } else {
+        wm_class
+    }
+}
+
+fn client_class(client: &HyprClient) -> String {
+    if client.wm_class.trim().is_empty() {
+        client.initial_class.clone()
+    } else {
+        client.wm_class.clone()
+    }
+}
+
 impl Scope {
     fn includes(
         self,
@@ -929,6 +1039,7 @@ fn focus_item(item: &SwitchItem) -> Result<()> {
     match item {
         SwitchItem::Window(window) => focus_window(window),
         SwitchItem::Workspace(workspace) => focus_workspace(workspace.id),
+        SwitchItem::Monitor(monitor) => focus_monitor(&monitor.name),
     }
 }
 
@@ -947,6 +1058,10 @@ fn focus_window(window: &WindowInfo) -> Result<()> {
 
 fn focus_workspace(workspace_id: i64) -> Result<()> {
     hyprctl(&["dispatch", "workspace", &workspace_id.to_string()])
+}
+
+fn focus_monitor(monitor_name: &str) -> Result<()> {
+    hyprctl(&["dispatch", "focusmonitor", monitor_name])
 }
 
 fn hyprctl(args: &[&str]) -> Result<()> {
@@ -1198,6 +1313,9 @@ mod tests {
             ProfileSettings {
                 target: Target::Windows,
                 scope: Scope::All,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
             }
         );
         assert_eq!(
@@ -1205,6 +1323,9 @@ mod tests {
             ProfileSettings {
                 target: Target::Workspaces,
                 scope: Scope::CurrentMonitor,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
             }
         );
     }
@@ -1224,6 +1345,9 @@ mod tests {
             ProfileSettings {
                 target: Target::Windows,
                 scope: Scope::CurrentWorkspace,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
             }
         );
         assert_eq!(
@@ -1231,6 +1355,35 @@ mod tests {
             ProfileSettings {
                 target: Target::Workspaces,
                 scope: Scope::CurrentMonitor,
+                same_class: false,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
+            }
+        );
+    }
+
+    #[test]
+    fn extended_profile_config_parses() {
+        let config = toml::from_str::<AppConfig>(
+            r#"
+            [super]
+            target = "windows"
+            scope = "current-workspace"
+            same_class = true
+            include_special_workspaces = true
+            include_empty_workspaces = true
+            "#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(
+            config.profile(Profile::Super),
+            ProfileSettings {
+                target: Target::Windows,
+                scope: Scope::CurrentWorkspace,
+                same_class: true,
+                include_special_workspaces: true,
+                include_empty_workspaces: true,
             }
         );
     }

@@ -3,12 +3,39 @@
 [alt]
 target = "windows"
 scope = "all"
+same_class = false
+include_special_workspaces = false
 
 [super]
 target = "workspaces"
 scope = "current-monitor"
+include_empty_workspaces = false
+include_special_workspaces = false
 
-# Common alternative:
+# Common alternatives:
+#
+# Windows/Super-Tab cycles windows from the current workspace:
+# [super]
+# target = "windows"
+# scope = "current-workspace"
+#
+# Windows/Super-Tab cycles windows from the current monitor:
+# [super]
+# target = "windows"
+# scope = "current-monitor"
+#
+# Alt-Tab limited to the current workspace:
 # [alt]
 # target = "windows"
 # scope = "current-workspace"
+#
+# Same-app switching, useful for terminals/editors:
+# [alt]
+# target = "windows"
+# scope = "all"
+# same_class = true
+#
+# Monitor switching:
+# [super]
+# target = "monitors"
+# scope = "all"
