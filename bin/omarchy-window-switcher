@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Small Hyprland window switcher for Omarchy.
+
+The tool intentionally avoids a resident daemon. It asks Hyprland for the
+current client list, lets Walker handle the menu UI, then focuses the selected
+window by address.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+
+class SwitcherError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Workspace:
+    id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class Window:
+    address: str
+    title: str
+    wm_class: str
+    workspace: Workspace
+    monitor: int
+    focus_history_id: int
+    mapped: bool
+    hidden: bool
+    accepts_input: bool
+    pinned: bool
+
+    @property
+    def is_special(self) -> bool:
+        return self.workspace.id < 0 or self.workspace.name.startswith("special:")
+
+    @property
+    def display_name(self) -> str:
+        title = self.title.strip()
+        wm_class = self.wm_class.strip()
+        if title and wm_class:
+            return f"{wm_class}: {title}"
+        return title or wm_class or self.address
+
+
+def run_json(command: Sequence[str]) -> Any:
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+        )
+    except FileNotFoundError as exc:
+        raise SwitcherError(f"Missing command: {command[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip()
+        raise SwitcherError(f"{' '.join(command)} failed: {detail}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SwitcherError(f"{' '.join(command)} timed out") from exc
+
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SwitcherError(f"{' '.join(command)} returned invalid JSON") from exc
+
+
+def parse_clients(raw_clients: Iterable[dict[str, Any]]) -> list[Window]:
+    windows: list[Window] = []
+    for raw in raw_clients:
+        workspace = raw.get("workspace") or {}
+        focus_history_id = raw.get("focusHistoryID")
+        windows.append(
+            Window(
+                address=str(raw.get("address") or ""),
+                title=str(raw.get("title") or ""),
+                wm_class=str(raw.get("class") or raw.get("initialClass") or ""),
+                workspace=Workspace(
+                    id=int(workspace.get("id") or 0),
+                    name=str(workspace.get("name") or ""),
+                ),
+                monitor=int(raw.get("monitor") or 0),
+                focus_history_id=int(focus_history_id) if focus_history_id is not None else 999999,
+                mapped=bool(raw.get("mapped", True)),
+                hidden=bool(raw.get("hidden", False)),
+                accepts_input=bool(raw.get("acceptsInput", True)),
+                pinned=bool(raw.get("pinned", False)),
+            )
+        )
+    return windows
+
+
+def active_context(hyprctl: str) -> tuple[int | None, int | None, str | None]:
+    try:
+        active = run_json([hyprctl, "activewindow", "-j"])
+    except SwitcherError:
+        return None, None, None
+
+    workspace = active.get("workspace") or {}
+    workspace_id = workspace.get("id")
+    monitor_id = active.get("monitor")
+    address = active.get("address")
+
+    return (
+        int(monitor_id) if isinstance(monitor_id, int) else None,
+        int(workspace_id) if isinstance(workspace_id, int) else None,
+        str(address) if address else None,
+    )
+
+
+def filter_windows(
+    windows: Iterable[Window],
+    *,
+    current_monitor: int | None = None,
+    current_workspace: int | None = None,
+    include_special: bool = False,
+) -> list[Window]:
+    filtered: list[Window] = []
+    for window in windows:
+        if not window.address or not window.mapped or window.hidden or not window.accepts_input:
+            continue
+        if window.is_special and not include_special:
+            continue
+        if current_monitor is not None and window.monitor != current_monitor:
+            continue
+        if current_workspace is not None and window.workspace.id != current_workspace:
+            continue
+        filtered.append(window)
+    return sorted(filtered, key=lambda win: (win.focus_history_id, win.workspace.id, win.display_name.lower()))
+
+
+def label(window: Window) -> str:
+    workspace = window.workspace.name or str(window.workspace.id)
+    pinned = " pinned" if window.pinned else ""
+    return f"{window.display_name}  [ws {workspace} | mon {window.monitor}{pinned}]"
+
+
+def choose_index_with_walker(windows: Sequence[Window], walker: str, placeholder: str) -> int | None:
+    if not shutil.which(walker):
+        raise SwitcherError(f"Missing command: {walker}")
+
+    menu_input = "\n".join(label(window) for window in windows)
+    try:
+        result = subprocess.run(
+            [walker, "--dmenu", "--index", "--placeholder", placeholder, "--selectsingle"],
+            input=menu_input,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SwitcherError("walker timed out") from exc
+
+    if result.returncode != 0:
+        return None
+
+    selected = result.stdout.strip()
+    if not selected:
+        return None
+
+    try:
+        index = int(selected)
+    except ValueError as exc:
+        raise SwitcherError(f"walker returned a non-numeric index: {selected}") from exc
+
+    if index < 0 or index >= len(windows):
+        raise SwitcherError(f"walker returned an out-of-range index: {index}")
+    return index
+
+
+def focus_commands(window: Window, *, switch_workspace: bool = True) -> list[list[str]]:
+    commands: list[list[str]] = []
+    if switch_workspace and window.workspace.id > 0:
+        commands.append(["hyprctl", "dispatch", "workspace", str(window.workspace.id)])
+    commands.append(["hyprctl", "dispatch", "focuswindow", f"address:{window.address}"])
+    commands.append(["hyprctl", "dispatch", "bringactivetotop"])
+    return commands
+
+
+def focus_window(window: Window, *, hyprctl: str, dry_run: bool = False, switch_workspace: bool = True) -> None:
+    for command in focus_commands(window, switch_workspace=switch_workspace):
+        command = [hyprctl if part == "hyprctl" else part for part in command]
+        if dry_run:
+            print(" ".join(command))
+            continue
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=3)
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr.strip()
+            raise SwitcherError(f"{' '.join(command)} failed: {detail}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise SwitcherError(f"{' '.join(command)} timed out") from exc
+
+
+def next_window(windows: Sequence[Window], active_address: str | None, *, reverse: bool = False) -> Window | None:
+    if not windows:
+        return None
+
+    ordered = list(windows)
+    if reverse:
+        ordered = list(reversed(ordered))
+
+    for window in ordered:
+        if window.address != active_address:
+            return window
+    return ordered[0]
+
+
+def load_windows(args: argparse.Namespace) -> list[Window]:
+    if args.json_file:
+        data = json.loads(Path(args.json_file).read_text())
+    else:
+        data = run_json([args.hyprctl, "clients", "-j"])
+    return parse_clients(data)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Omarchy-friendly Hyprland window switcher")
+    parser.add_argument("mode", nargs="?", choices=("choose", "next", "prev", "list"), default="choose")
+    parser.add_argument("--all-monitors", action="store_true", help="include windows from every monitor")
+    parser.add_argument("--current-workspace", action="store_true", help="only include windows from the active workspace")
+    parser.add_argument("--include-special", action="store_true", help="include special workspaces such as scratchpad")
+    parser.add_argument("--no-workspace-switch", action="store_true", help="focus without dispatching workspace first")
+    parser.add_argument("--dry-run", action="store_true", help="print focus commands instead of running them")
+    parser.add_argument("--hyprctl", default="hyprctl", help="hyprctl binary to use")
+    parser.add_argument("--walker", default="walker", help="walker binary to use for choose mode")
+    parser.add_argument("--placeholder", default="Switch window", help="walker placeholder text")
+    parser.add_argument("--json-file", help="load clients JSON from a file, useful for tests")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        active_monitor, active_workspace, active_address = active_context(args.hyprctl)
+        windows = filter_windows(
+            load_windows(args),
+            current_monitor=None if args.all_monitors else active_monitor,
+            current_workspace=active_workspace if args.current_workspace else None,
+            include_special=args.include_special,
+        )
+
+        if args.mode == "list":
+            for window in windows:
+                print(label(window))
+            return 0
+
+        if not windows:
+            raise SwitcherError("No windows to switch to")
+
+        if args.mode == "choose":
+            index = choose_index_with_walker(windows, args.walker, args.placeholder)
+            if index is None:
+                return 130
+            target = windows[index]
+        else:
+            target = next_window(windows, active_address, reverse=args.mode == "prev")
+            if target is None:
+                raise SwitcherError("No target window found")
+
+        focus_window(target, hyprctl=args.hyprctl, dry_run=args.dry_run, switch_workspace=not args.no_workspace_switch)
+        return 0
+    except SwitcherError as exc:
+        print(f"omarchy-window-switcher: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
