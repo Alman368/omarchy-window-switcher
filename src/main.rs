@@ -657,9 +657,13 @@ impl SwitchItem {
 impl WindowInfo {
     fn display_name(&self) -> String {
         if !self.title.trim().is_empty() && !self.wm_class.trim().is_empty() {
-            format!("{}: {}", app_display_name(&self.wm_class), self.title)
+            format!(
+                "{}: {}",
+                app_display_name(&self.wm_class),
+                clean_display_title(&self.title)
+            )
         } else if !self.title.trim().is_empty() {
-            self.title.clone()
+            clean_display_title(&self.title)
         } else if !self.wm_class.trim().is_empty() {
             app_display_name(&self.wm_class).to_string()
         } else {
@@ -669,7 +673,7 @@ impl WindowInfo {
 
     fn short_title(&self) -> String {
         if !self.title.trim().is_empty() {
-            self.title.clone()
+            clean_display_title(&self.title)
         } else if !self.wm_class.trim().is_empty() {
             app_display_name(&self.wm_class).to_string()
         } else {
@@ -680,14 +684,18 @@ impl WindowInfo {
 
 impl WorkspaceInfo {
     fn display_name(&self) -> String {
-        format!("Workspace {}: {}", self.name, self.last_title)
+        format!(
+            "Workspace {}: {}",
+            self.name,
+            clean_display_title(&self.last_title)
+        )
     }
 
     fn short_title(&self) -> String {
         if self.last_title.trim().is_empty() {
             format!("Workspace {}", self.name)
         } else {
-            self.last_title.clone()
+            clean_display_title(&self.last_title)
         }
     }
 }
@@ -729,6 +737,14 @@ fn app_display_name(class_name: &str) -> &'static str {
         "obsidian" => "Obsidian",
         _ => "Application",
     }
+}
+
+fn clean_display_title(title: &str) -> String {
+    title
+        .replace(" --- ", " | ")
+        .replace(" -- ", " | ")
+        .replace(" — ", " | ")
+        .replace(" – ", " | ")
 }
 
 fn load_config() -> AppConfig {
@@ -1228,5 +1244,14 @@ mod tests {
     #[test]
     fn markup_is_stripped_from_titles() {
         assert_eq!(strip_markup("one <b>two</b> three"), "one two three");
+    }
+
+    #[test]
+    fn display_titles_use_pipe_separators() {
+        assert_eq!(clean_display_title("Desktop — rnn.py"), "Desktop | rnn.py");
+        assert_eq!(
+            clean_display_title("one --- two -- three – four"),
+            "one | two | three | four"
+        );
     }
 }
