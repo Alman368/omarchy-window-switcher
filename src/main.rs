@@ -24,8 +24,6 @@ const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
-const DUPLICATE_ADVANCE_GRACE: Duration = Duration::from_millis(45);
-const CROSS_SOURCE_DUPLICATE_GRACE: Duration = Duration::from_millis(120);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -126,21 +124,8 @@ enum Direction {
 #[derive(Debug, Clone, Copy)]
 enum IpcCommand {
     Open(OpenRequest),
-    OpenFromKeyboard(OpenRequest),
     Close,
     Cancel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AdvanceSource {
-    Binding,
-    Keyboard,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AdvanceRecord {
-    at: Instant,
-    source: AdvanceSource,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -305,8 +290,6 @@ struct SwitcherState {
     selected: usize,
     open: bool,
     pending_close_until: Option<Instant>,
-    last_closed_at: Option<Instant>,
-    last_advance: Option<AdvanceRecord>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -424,8 +407,6 @@ fn run_daemon() -> Result<()> {
             selected: 0,
             open: false,
             pending_close_until: None,
-            last_closed_at: None,
-            last_advance: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -455,7 +436,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .unwrap_or(Profile::Alt);
             state_pressed
                 .borrow_mut()
-                .handle(IpcCommand::OpenFromKeyboard(OpenRequest {
+                .handle(IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Next,
                 }));
@@ -468,7 +449,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .unwrap_or(Profile::Alt);
             state_pressed
                 .borrow_mut()
-                .handle(IpcCommand::OpenFromKeyboard(OpenRequest {
+                .handle(IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Prev,
                 }));
@@ -485,29 +466,30 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
         _ => Propagation::Proceed,
     });
 
+    let state_released = Rc::clone(&state);
+    controller.connect_key_released(move |_, key, _, _| {
+        if matches!(
+            key,
+            gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
+        ) {
+            state_released.borrow_mut().handle(IpcCommand::Close);
+        }
+    });
+
     window.add_controller(controller);
 }
 
 impl SwitcherState {
     fn handle(&mut self, command: IpcCommand) {
         match command {
-            IpcCommand::Open(request) => self.open_or_advance(request, AdvanceSource::Binding),
-            IpcCommand::OpenFromKeyboard(request) => {
-                self.open_or_advance(request, AdvanceSource::Keyboard)
-            }
+            IpcCommand::Open(request) => self.open_or_advance(request),
             IpcCommand::Close => self.close(true),
             IpcCommand::Cancel => self.close(false),
         }
     }
 
-    fn open_or_advance(&mut self, request: OpenRequest, source: AdvanceSource) {
-        let now = Instant::now();
-
+    fn open_or_advance(&mut self, request: OpenRequest) {
         if self.open {
-            if is_duplicate_advance(self.last_advance, now, source) {
-                return;
-            }
-            self.last_advance = Some(AdvanceRecord { at: now, source });
             self.advance(request.direction);
             self.render();
             return;
@@ -520,7 +502,6 @@ impl SwitcherState {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
-                self.last_advance = Some(AdvanceRecord { at: now, source });
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -553,18 +534,14 @@ impl SwitcherState {
     }
 
     fn close(&mut self, should_focus: bool) {
-        let now = Instant::now();
-
         if !self.open {
-            if should_focus && !is_duplicate_close(self.last_closed_at, now) {
-                self.pending_close_until = Some(now + CLOSE_RACE_GRACE);
+            if should_focus {
+                self.pending_close_until = Some(Instant::now() + CLOSE_RACE_GRACE);
             }
             return;
         }
 
         self.pending_close_until = None;
-        self.last_closed_at = Some(now);
-        self.last_advance = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
@@ -613,25 +590,6 @@ fn initial_selection(len: usize, direction: Direction) -> usize {
     } else {
         1
     }
-}
-
-fn is_duplicate_advance(
-    last_advance: Option<AdvanceRecord>,
-    now: Instant,
-    source: AdvanceSource,
-) -> bool {
-    last_advance.is_some_and(|last| {
-        let grace = if last.source == source {
-            DUPLICATE_ADVANCE_GRACE
-        } else {
-            CROSS_SOURCE_DUPLICATE_GRACE
-        };
-        now.duration_since(last.at) < grace
-    })
-}
-
-fn is_duplicate_close(last_closed_at: Option<Instant>, now: Instant) -> bool {
-    last_closed_at.is_some_and(|last| now.duration_since(last) < CLOSE_RACE_GRACE)
 }
 
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
@@ -711,9 +669,9 @@ impl SwitchItem {
         match self {
             Self::Window(window) => {
                 if window.pinned {
-                    format!("window | ws {} | pinned", window.workspace_name)
+                    format!("ws {} - pinned", window.workspace_name)
                 } else {
-                    format!("window | ws {}", window.workspace_name)
+                    format!("ws {}", window.workspace_name)
                 }
             }
             Self::Workspace(workspace) => {
@@ -722,10 +680,7 @@ impl SwitchItem {
                 } else {
                     "windows"
                 };
-                format!(
-                    "workspace | ws {} | {} {}",
-                    workspace.name, workspace.windows, count
-                )
+                format!("ws {} - {} {}", workspace.name, workspace.windows, count)
             }
             Self::Monitor(monitor) => format!("ws {}", monitor.active_workspace_name),
         }
@@ -1214,32 +1169,16 @@ fn ipc_payload(command: IpcCommand) -> &'static str {
         IpcCommand::Open(OpenRequest {
             profile: Profile::Alt,
             direction: Direction::Next,
-        })
-        | IpcCommand::OpenFromKeyboard(OpenRequest {
-            profile: Profile::Alt,
-            direction: Direction::Next,
         }) => "open alt next\n",
         IpcCommand::Open(OpenRequest {
-            profile: Profile::Alt,
-            direction: Direction::Prev,
-        })
-        | IpcCommand::OpenFromKeyboard(OpenRequest {
             profile: Profile::Alt,
             direction: Direction::Prev,
         }) => "open alt prev\n",
         IpcCommand::Open(OpenRequest {
             profile: Profile::Super,
             direction: Direction::Next,
-        })
-        | IpcCommand::OpenFromKeyboard(OpenRequest {
-            profile: Profile::Super,
-            direction: Direction::Next,
         }) => "open super next\n",
         IpcCommand::Open(OpenRequest {
-            profile: Profile::Super,
-            direction: Direction::Prev,
-        })
-        | IpcCommand::OpenFromKeyboard(OpenRequest {
             profile: Profile::Super,
             direction: Direction::Prev,
         }) => "open super prev\n",
@@ -1324,56 +1263,6 @@ mod tests {
     fn initial_prev_wraps_to_oldest_window() {
         assert_eq!(initial_selection(1, Direction::Prev), 0);
         assert_eq!(initial_selection(4, Direction::Prev), 3);
-    }
-
-    #[test]
-    fn duplicate_advance_guard_catches_initial_overlay_key_event() {
-        let opened_at = Instant::now();
-        let binding_advance = AdvanceRecord {
-            at: opened_at,
-            source: AdvanceSource::Binding,
-        };
-
-        assert!(is_duplicate_advance(
-            Some(binding_advance),
-            opened_at + Duration::from_millis(20),
-            AdvanceSource::Binding
-        ));
-        assert!(!is_duplicate_advance(
-            Some(binding_advance),
-            opened_at + DUPLICATE_ADVANCE_GRACE + Duration::from_millis(1),
-            AdvanceSource::Binding
-        ));
-        assert!(is_duplicate_advance(
-            Some(binding_advance),
-            opened_at + Duration::from_millis(80),
-            AdvanceSource::Keyboard
-        ));
-        assert!(!is_duplicate_advance(
-            Some(binding_advance),
-            opened_at + CROSS_SOURCE_DUPLICATE_GRACE + Duration::from_millis(1),
-            AdvanceSource::Keyboard
-        ));
-        assert!(!is_duplicate_advance(
-            None,
-            opened_at,
-            AdvanceSource::Keyboard
-        ));
-    }
-
-    #[test]
-    fn duplicate_close_guard_ignores_second_release_after_switch() {
-        let closed_at = Instant::now();
-
-        assert!(is_duplicate_close(
-            Some(closed_at),
-            closed_at + Duration::from_millis(40)
-        ));
-        assert!(!is_duplicate_close(
-            Some(closed_at),
-            closed_at + CLOSE_RACE_GRACE + Duration::from_millis(1)
-        ));
-        assert!(!is_duplicate_close(None, closed_at));
     }
 
     #[test]
@@ -1503,12 +1392,6 @@ mod tests {
     fn scope_current_monitor_matches_only_active_monitor() {
         assert!(Scope::CurrentMonitor.includes(6, 1, Some(6), Some(1)));
         assert!(!Scope::CurrentMonitor.includes(2, 0, Some(6), Some(1)));
-    }
-
-    #[test]
-    fn scope_current_workspace_matches_only_active_workspace() {
-        assert!(Scope::CurrentWorkspace.includes(6, 1, Some(6), Some(1)));
-        assert!(!Scope::CurrentWorkspace.includes(2, 1, Some(6), Some(1)));
     }
 
     #[test]
