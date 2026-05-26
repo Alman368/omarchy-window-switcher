@@ -24,6 +24,7 @@ const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
+const INITIAL_TAB_SUPPRESSION_GRACE: Duration = Duration::from_millis(180);
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -290,6 +291,7 @@ struct SwitcherState {
     selected: usize,
     open: bool,
     pending_close_until: Option<Instant>,
+    ignore_initial_tab_until: Option<Instant>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -407,6 +409,7 @@ fn run_daemon() -> Result<()> {
             selected: 0,
             open: false,
             pending_close_until: None,
+            ignore_initial_tab_until: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -429,7 +432,14 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     let controller = gtk::EventControllerKey::new();
     let state_pressed = Rc::clone(&state);
     controller.connect_key_pressed(move |_, key, _, _| match key {
-        gdk::Key::Tab | gdk::Key::Right | gdk::Key::l => {
+        gdk::Key::Tab => {
+            if state_pressed
+                .borrow_mut()
+                .consume_initial_keyboard_tab(Instant::now())
+            {
+                return Propagation::Stop;
+            }
+
             let profile = state_pressed
                 .borrow()
                 .active_profile
@@ -442,7 +452,40 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 }));
             Propagation::Stop
         }
-        gdk::Key::ISO_Left_Tab | gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
+        gdk::Key::Right | gdk::Key::l => {
+            let profile = state_pressed
+                .borrow()
+                .active_profile
+                .unwrap_or(Profile::Alt);
+            state_pressed
+                .borrow_mut()
+                .handle(IpcCommand::Open(OpenRequest {
+                    profile,
+                    direction: Direction::Next,
+                }));
+            Propagation::Stop
+        }
+        gdk::Key::ISO_Left_Tab => {
+            if state_pressed
+                .borrow_mut()
+                .consume_initial_keyboard_tab(Instant::now())
+            {
+                return Propagation::Stop;
+            }
+
+            let profile = state_pressed
+                .borrow()
+                .active_profile
+                .unwrap_or(Profile::Alt);
+            state_pressed
+                .borrow_mut()
+                .handle(IpcCommand::Open(OpenRequest {
+                    profile,
+                    direction: Direction::Prev,
+                }));
+            Propagation::Stop
+        }
+        gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
             let profile = state_pressed
                 .borrow()
                 .active_profile
@@ -468,6 +511,10 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
 
     let state_released = Rc::clone(&state);
     controller.connect_key_released(move |_, key, _, _| {
+        if matches!(key, gdk::Key::Tab | gdk::Key::ISO_Left_Tab) {
+            state_released.borrow_mut().clear_initial_keyboard_tab();
+        }
+
         if matches!(
             key,
             gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
@@ -502,6 +549,8 @@ impl SwitcherState {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
+                self.ignore_initial_tab_until =
+                    Some(Instant::now() + INITIAL_TAB_SUPPRESSION_GRACE);
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -513,6 +562,19 @@ impl SwitcherState {
             Ok(_) => {}
             Err(err) => eprintln!("omarchy-window-switcher: failed to collect items: {err:#}"),
         }
+    }
+
+    fn consume_initial_keyboard_tab(&mut self, now: Instant) -> bool {
+        let Some(deadline) = self.ignore_initial_tab_until else {
+            return false;
+        };
+
+        self.ignore_initial_tab_until = None;
+        now <= deadline
+    }
+
+    fn clear_initial_keyboard_tab(&mut self) {
+        self.ignore_initial_tab_until = None;
     }
 
     fn advance(&mut self, direction: Direction) {
@@ -542,6 +604,7 @@ impl SwitcherState {
         }
 
         self.pending_close_until = None;
+        self.ignore_initial_tab_until = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
