@@ -448,7 +448,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     let controller = gtk::EventControllerKey::new();
     let state_pressed = Rc::clone(&state);
     controller.connect_key_pressed(move |_, key, _, _| match key {
-        gdk::Key::Tab | gdk::Key::Right | gdk::Key::l => {
+        gdk::Key::Right | gdk::Key::l => {
             let profile = state_pressed
                 .borrow()
                 .active_profile
@@ -458,10 +458,10 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .handle(IpcCommand::OpenFromKeyboard(OpenRequest {
                     profile,
                     direction: Direction::Next,
-                }));
+            }));
             Propagation::Stop
         }
-        gdk::Key::ISO_Left_Tab | gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
+        gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
             let profile = state_pressed
                 .borrow()
                 .active_profile
