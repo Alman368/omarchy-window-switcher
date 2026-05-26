@@ -33,21 +33,21 @@ window {
   background: rgba(18, 20, 24, 0.98);
   border: 1px solid rgba(210, 218, 230, 0.18);
   border-radius: 8px;
-  padding: 10px;
+  padding: 14px;
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38);
 }
 
 .switcher-row {
-  border-spacing: 8px;
+  border-spacing: 10px;
 }
 
 .switcher-card {
   background: rgba(37, 41, 49, 0.98);
   border: 2px solid rgba(210, 218, 230, 0.14);
   border-radius: 8px;
-  padding: 10px;
-  min-width: 148px;
-  min-height: 112px;
+  padding: 14px;
+  min-width: 176px;
+  min-height: 138px;
 }
 
 .switcher-card.selected {
@@ -56,26 +56,26 @@ window {
 }
 
 .switcher-icon {
-  margin-bottom: 7px;
+  margin-bottom: 9px;
 }
 
 .switcher-app {
   color: rgba(221, 228, 238, 0.96);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .switcher-title {
   color: rgba(248, 250, 252, 0.98);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
 .switcher-meta {
   color: rgba(185, 195, 210, 0.86);
-  font-size: 10px;
-  margin-top: 5px;
+  font-size: 11px;
+  margin-top: 7px;
 }
 "#;
 
@@ -334,8 +334,8 @@ fn run_daemon() -> Result<()> {
             .title("Omarchy Window Switcher")
             .decorated(false)
             .resizable(false)
-            .default_width(880)
-            .default_height(160)
+            .default_width(1080)
+            .default_height(204)
             .build();
         window.init_layer_shell();
         window.set_namespace(Some(NAMESPACE));
@@ -346,9 +346,9 @@ fn run_daemon() -> Result<()> {
         panel.add_css_class("switcher-panel");
         panel.set_halign(gtk::Align::Center);
         panel.set_valign(gtk::Align::Center);
-        panel.set_size_request(920, 142);
+        panel.set_size_request(1080, 180);
 
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         row.add_css_class("switcher-row");
         row.set_halign(gtk::Align::Center);
         row.set_valign(gtk::Align::Center);
@@ -565,21 +565,21 @@ fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
 
     let icon = gtk::Image::from_icon_name(item.icon_name());
     icon.add_css_class("switcher-icon");
-    icon.set_pixel_size(36);
+    icon.set_pixel_size(44);
     icon.set_halign(gtk::Align::Center);
     card.append(&icon);
 
     let app = gtk::Label::new(Some(&item.app_label()));
     app.add_css_class("switcher-app");
     app.set_ellipsize(pango::EllipsizeMode::End);
-    app.set_max_width_chars(18);
+    app.set_max_width_chars(20);
     app.set_halign(gtk::Align::Center);
     card.append(&app);
 
     let title = gtk::Label::new(Some(&item.short_title()));
     title.add_css_class("switcher-title");
     title.set_ellipsize(pango::EllipsizeMode::End);
-    title.set_max_width_chars(20);
+    title.set_max_width_chars(24);
     title.set_lines(2);
     title.set_wrap(true);
     title.set_halign(gtk::Align::Center);
