@@ -1,17 +1,18 @@
 # Omarchy Window Switcher
 
-A small Hyprland window switcher built for Omarchy.
+A fast Windows-style MRU Alt-Tab switcher for Omarchy/Hyprland.
 
-It avoids a background daemon: every invocation reads `hyprctl clients -j`, lets
-`walker --dmenu` handle the menu, then focuses the selected window by Hyprland
-address.
+It runs a tiny GTK4/layer-shell daemon and uses a Unix socket for hotkey
+commands. `ALT+TAB` and `SUPER+TAB` cycle through windows in most-recently-used
+order, then focus the selected window when the modifier key is released.
 
 ## Requirements
 
 - Omarchy / Hyprland
 - `hyprctl`
-- `walker`
-- Python 3.11+
+- Rust 1.91+
+- `gtk4`
+- `gtk4-layer-shell`
 
 ## Install
 
@@ -23,28 +24,41 @@ This installs `omarchy-window-switcher` to `~/.local/bin`.
 
 ## Usage
 
-Open an interactive window list:
+Run the resident daemon:
 
 ```bash
-omarchy-window-switcher choose --all-monitors
+omarchy-window-switcher run
 ```
 
-Focus the next recent window without opening a menu:
+Open or advance the switcher:
 
 ```bash
-omarchy-window-switcher next --all-monitors
+omarchy-window-switcher open next
+omarchy-window-switcher open prev
+```
+
+Close and focus the selected window:
+
+```bash
+omarchy-window-switcher close
+```
+
+Cancel without switching:
+
+```bash
+omarchy-window-switcher cancel
 ```
 
 Show the windows the tool can see:
 
 ```bash
-omarchy-window-switcher list --all-monitors
+omarchy-window-switcher list
 ```
 
 ## Test
 
 ```bash
-python3 -m pytest -q
+cargo test
 ```
 
 ## Hyprland Binding
@@ -52,23 +66,26 @@ python3 -m pytest -q
 Add this to `~/.config/hypr/bindings.conf`:
 
 ```ini
+exec-once = /home/your-user/.local/bin/omarchy-window-switcher run
+
 unbind = ALT, TAB
 unbind = ALT SHIFT, TAB
-bindd = ALT, TAB, Window switcher, exec, uwsm-app -- /home/your-user/.local/bin/omarchy-window-switcher choose --all-monitors
-bindd = ALT SHIFT, TAB, Previous recent window, exec, uwsm-app -- /home/your-user/.local/bin/omarchy-window-switcher prev --all-monitors
+unbind = SUPER, TAB
+unbind = SUPER SHIFT, TAB
+
+binded = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open next
+binded = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open prev
+binded = SUPER, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open next
+binded = SUPER SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open prev
+
+binddr = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
+binddr = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
+binddr = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
+binddr = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
 ```
-
-If you want to keep Omarchy's default `ALT+TAB` behavior, bind the menu to a
-different key instead:
-
-```ini
-bindd = SUPER, GRAVE, Window list, exec, uwsm-app -- /home/your-user/.local/bin/omarchy-window-switcher choose --all-monitors
-```
-
-The installer prints bindings with your actual install path. This matters under
-UWSM because its service environment may not include `~/.local/bin` in `PATH`.
 
 ## Why
 
-Hyprland already exposes the truth through JSON. This tool keeps the moving
-parts minimal and delegates the menu to Walker, which Omarchy already ships.
+Hyprshell is a capable Rust/GTK4 project, but it also includes a launcher,
+plugins, config editor, desktop-file indexing and more. This project keeps only
+the fast MRU switcher path: Hyprland JSON in, small layer-shell overlay out.
