@@ -305,6 +305,7 @@ struct SwitcherState {
     selected: usize,
     open: bool,
     pending_close_until: Option<Instant>,
+    last_closed_at: Option<Instant>,
     last_advance: Option<AdvanceRecord>,
     active_profile: Option<Profile>,
     config: AppConfig,
@@ -423,6 +424,7 @@ fn run_daemon() -> Result<()> {
             selected: 0,
             open: false,
             pending_close_until: None,
+            last_closed_at: None,
             last_advance: None,
             active_profile: None,
             config: load_config(),
@@ -481,16 +483,6 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
             Propagation::Stop
         }
         _ => Propagation::Proceed,
-    });
-
-    let state_released = Rc::clone(&state);
-    controller.connect_key_released(move |_, key, _, _| {
-        if matches!(
-            key,
-            gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
-        ) {
-            state_released.borrow_mut().handle(IpcCommand::Close);
-        }
     });
 
     window.add_controller(controller);
@@ -561,14 +553,17 @@ impl SwitcherState {
     }
 
     fn close(&mut self, should_focus: bool) {
+        let now = Instant::now();
+
         if !self.open {
-            if should_focus {
-                self.pending_close_until = Some(Instant::now() + CLOSE_RACE_GRACE);
+            if should_focus && !is_duplicate_close(self.last_closed_at, now) {
+                self.pending_close_until = Some(now + CLOSE_RACE_GRACE);
             }
             return;
         }
 
         self.pending_close_until = None;
+        self.last_closed_at = Some(now);
         self.last_advance = None;
         self.active_profile = None;
         self.open = false;
@@ -633,6 +628,10 @@ fn is_duplicate_advance(
         };
         now.duration_since(last.at) < grace
     })
+}
+
+fn is_duplicate_close(last_closed_at: Option<Instant>, now: Instant) -> bool {
+    last_closed_at.is_some_and(|last| now.duration_since(last) < CLOSE_RACE_GRACE)
 }
 
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
@@ -1360,6 +1359,21 @@ mod tests {
             opened_at,
             AdvanceSource::Keyboard
         ));
+    }
+
+    #[test]
+    fn duplicate_close_guard_ignores_second_release_after_switch() {
+        let closed_at = Instant::now();
+
+        assert!(is_duplicate_close(
+            Some(closed_at),
+            closed_at + Duration::from_millis(40)
+        ));
+        assert!(!is_duplicate_close(
+            Some(closed_at),
+            closed_at + CLOSE_RACE_GRACE + Duration::from_millis(1)
+        ));
+        assert!(!is_duplicate_close(None, closed_at));
     }
 
     #[test]
