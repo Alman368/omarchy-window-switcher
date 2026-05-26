@@ -22,10 +22,10 @@ unbind = ALT SHIFT, TAB
 unbind = SUPER, TAB
 unbind = SUPER SHIFT, TAB
 
-binded = ALT, TAB, Window switcher next, exec, $bindir/omarchy-window-switcher open next
-binded = ALT SHIFT, TAB, Window switcher previous, exec, $bindir/omarchy-window-switcher open prev
-binded = SUPER, TAB, Window switcher next, exec, $bindir/omarchy-window-switcher open next
-binded = SUPER SHIFT, TAB, Window switcher previous, exec, $bindir/omarchy-window-switcher open prev
+binded = ALT, TAB, Window switcher next, exec, $bindir/omarchy-window-switcher open --profile alt next
+binded = ALT SHIFT, TAB, Window switcher previous, exec, $bindir/omarchy-window-switcher open --profile alt prev
+binded = SUPER, TAB, Window switcher workspace next, exec, $bindir/omarchy-window-switcher open --profile super next
+binded = SUPER SHIFT, TAB, Window switcher workspace previous, exec, $bindir/omarchy-window-switcher open --profile super prev
 
 binddr = ALT, Alt_L, Window switcher close, exec, $bindir/omarchy-window-switcher close
 binddr = ALT, Alt_R, Window switcher close, exec, $bindir/omarchy-window-switcher close

@@ -1,0 +1,14 @@
+# Defaults. Copy to ~/.config/omarchy-window-switcher/config.toml to override.
+
+[alt]
+target = "windows"
+scope = "all"
+
+[super]
+target = "workspaces"
+scope = "current-monitor"
+
+# Common alternative:
+# [alt]
+# target = "windows"
+# scope = "current-workspace"
