@@ -497,10 +497,7 @@ impl SwitcherState {
     fn open_or_advance(&mut self, request: OpenRequest) {
         if self.open {
             let now = Instant::now();
-            if self
-                .last_advance_at
-                .is_some_and(|last| now.duration_since(last) < DUPLICATE_ADVANCE_GRACE)
-            {
+            if is_duplicate_advance(self.last_advance_at, now) {
                 return;
             }
             self.last_advance_at = Some(now);
@@ -516,7 +513,7 @@ impl SwitcherState {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
-                self.last_advance_at = None;
+                self.last_advance_at = Some(Instant::now());
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
@@ -606,6 +603,10 @@ fn initial_selection(len: usize, direction: Direction) -> usize {
     } else {
         1
     }
+}
+
+fn is_duplicate_advance(last_advance_at: Option<Instant>, now: Instant) -> bool {
+    last_advance_at.is_some_and(|last| now.duration_since(last) < DUPLICATE_ADVANCE_GRACE)
 }
 
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
@@ -1298,6 +1299,21 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_advance_guard_catches_initial_overlay_key_event() {
+        let opened_at = Instant::now();
+
+        assert!(is_duplicate_advance(
+            Some(opened_at),
+            opened_at + Duration::from_millis(20)
+        ));
+        assert!(!is_duplicate_advance(
+            Some(opened_at),
+            opened_at + DUPLICATE_ADVANCE_GRACE + Duration::from_millis(1)
+        ));
+        assert!(!is_duplicate_advance(None, opened_at));
+    }
+
+    #[test]
     fn ipc_payloads_round_trip() {
         for command in [
             IpcCommand::Open(OpenRequest {
@@ -1424,6 +1440,12 @@ mod tests {
     fn scope_current_monitor_matches_only_active_monitor() {
         assert!(Scope::CurrentMonitor.includes(6, 1, Some(6), Some(1)));
         assert!(!Scope::CurrentMonitor.includes(2, 0, Some(6), Some(1)));
+    }
+
+    #[test]
+    fn scope_current_workspace_matches_only_active_workspace() {
+        assert!(Scope::CurrentWorkspace.includes(6, 1, Some(6), Some(1)));
+        assert!(!Scope::CurrentWorkspace.includes(2, 1, Some(6), Some(1)));
     }
 
     #[test]
