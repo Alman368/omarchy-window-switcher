@@ -448,7 +448,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     let controller = gtk::EventControllerKey::new();
     let state_pressed = Rc::clone(&state);
     controller.connect_key_pressed(move |_, key, _, _| match key {
-        gdk::Key::Tab | gdk::Key::Right | gdk::Key::l => {
+        gdk::Key::Right | gdk::Key::l => {
             let profile = state_pressed
                 .borrow()
                 .active_profile
@@ -461,7 +461,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 }));
             Propagation::Stop
         }
-        gdk::Key::ISO_Left_Tab | gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
+        gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
             let profile = state_pressed
                 .borrow()
                 .active_profile
@@ -490,6 +490,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
 
 impl SwitcherState {
     fn handle(&mut self, command: IpcCommand) {
+        debug_log(format!("handle {command:?}"));
         match command {
             IpcCommand::Open(request) => self.open_or_advance(request, AdvanceSource::Binding),
             IpcCommand::OpenFromKeyboard(request) => {
@@ -505,10 +506,20 @@ impl SwitcherState {
 
         if self.open {
             if is_duplicate_advance(self.last_advance, now, source) {
+                debug_log(format!("skip duplicate advance source={source:?}"));
                 return;
             }
             self.last_advance = Some(AdvanceRecord { at: now, source });
             self.advance(request.direction);
+            debug_log(format!(
+                "advance source={source:?} direction={:?} selected={} item={}",
+                request.direction,
+                self.selected,
+                self.items
+                    .get(self.selected)
+                    .map(SwitchItem::display_name)
+                    .unwrap_or_default()
+            ));
             self.render();
             return;
         }
@@ -519,6 +530,21 @@ impl SwitcherState {
             Ok(items) if !items.is_empty() => {
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
+                debug_log(format!(
+                    "open profile={:?} source={source:?} direction={:?} selected={} item={} items={}",
+                    request.profile,
+                    request.direction,
+                    self.selected,
+                    self.items
+                        .get(self.selected)
+                        .map(SwitchItem::display_name)
+                        .unwrap_or_default(),
+                    self.items
+                        .iter()
+                        .map(SwitchItem::display_name)
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ));
                 self.open = true;
                 self.last_advance = Some(AdvanceRecord { at: now, source });
                 self.active_profile = Some(request.profile);
@@ -557,7 +583,10 @@ impl SwitcherState {
 
         if !self.open {
             if should_focus && !is_duplicate_close(self.last_closed_at, now) {
+                debug_log("close while closed: storing pending close");
                 self.pending_close_until = Some(now + CLOSE_RACE_GRACE);
+            } else {
+                debug_log("close while closed: ignored duplicate close");
             }
             return;
         }
@@ -570,6 +599,14 @@ impl SwitcherState {
         self.window.set_visible(false);
 
         let selected = self.items.get(self.selected).cloned();
+        debug_log(format!(
+            "close should_focus={should_focus} selected={} item={}",
+            self.selected,
+            selected
+                .as_ref()
+                .map(SwitchItem::display_name)
+                .unwrap_or_default()
+        ));
         self.clear();
         self.items.clear();
         self.selected = 0;
@@ -1089,6 +1126,10 @@ fn focus_item(item: &SwitchItem) -> Result<()> {
 }
 
 fn focus_window(window: &WindowInfo) -> Result<()> {
+    debug_log(format!(
+        "focus window address={} class={} title={} workspace={} monitor={}",
+        window.address, window.wm_class, window.title, window.workspace_id, window.monitor
+    ));
     if window.workspace_id > 0 {
         focus_workspace(window.workspace_id)?;
     }
@@ -1307,6 +1348,12 @@ fn strip_markup(input: &str) -> String {
     }
 
     output.trim().to_string()
+}
+
+fn debug_log(message: impl AsRef<str>) {
+    if env::var_os("OMARCHY_WINDOW_SWITCHER_DEBUG").is_some() {
+        eprintln!("[{:?}] {}", Instant::now(), message.as_ref());
+    }
 }
 
 #[cfg(test)]
