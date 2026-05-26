@@ -30,51 +30,52 @@ window {
 }
 
 .switcher-panel {
-  background: rgba(18, 20, 24, 0.94);
-  border: 1px solid rgba(210, 218, 230, 0.22);
-  border-radius: 10px;
-  padding: 16px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  background: rgba(18, 20, 24, 0.98);
+  border: 1px solid rgba(210, 218, 230, 0.18);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38);
 }
 
 .switcher-row {
-  border-spacing: 10px;
+  border-spacing: 8px;
 }
 
 .switcher-card {
-  background: rgba(42, 47, 55, 0.92);
-  border: 2px solid rgba(210, 218, 230, 0.16);
+  background: rgba(37, 41, 49, 0.98);
+  border: 2px solid rgba(210, 218, 230, 0.14);
   border-radius: 8px;
-  padding: 12px;
-  min-width: 156px;
+  padding: 10px;
+  min-width: 148px;
   min-height: 112px;
 }
 
 .switcher-card.selected {
-  background: rgba(54, 68, 88, 0.98);
-  border-color: rgba(96, 169, 255, 0.96);
+  background: rgba(48, 59, 76, 1.0);
+  border-color: rgba(88, 166, 255, 0.96);
 }
 
 .switcher-icon {
-  margin-bottom: 8px;
+  margin-bottom: 7px;
+}
+
+.switcher-app {
+  color: rgba(221, 228, 238, 0.96);
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 4px;
 }
 
 .switcher-title {
   color: rgba(248, 250, 252, 0.98);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .switcher-meta {
   color: rgba(185, 195, 210, 0.86);
-  font-size: 11px;
-}
-
-.switcher-heading {
-  color: rgba(248, 250, 252, 0.98);
-  font-size: 14px;
-  font-weight: 700;
-  margin-bottom: 12px;
+  font-size: 10px;
+  margin-top: 5px;
 }
 "#;
 
@@ -258,7 +259,6 @@ enum SwitchItem {
 struct SwitcherState {
     window: gtk::ApplicationWindow,
     row: gtk::Box,
-    heading: gtk::Label,
     items: Vec<SwitchItem>,
     selected: usize,
     open: bool,
@@ -334,8 +334,8 @@ fn run_daemon() -> Result<()> {
             .title("Omarchy Window Switcher")
             .decorated(false)
             .resizable(false)
-            .default_width(920)
-            .default_height(220)
+            .default_width(880)
+            .default_height(160)
             .build();
         window.init_layer_shell();
         window.set_namespace(Some(NAMESPACE));
@@ -346,16 +346,12 @@ fn run_daemon() -> Result<()> {
         panel.add_css_class("switcher-panel");
         panel.set_halign(gtk::Align::Center);
         panel.set_valign(gtk::Align::Center);
+        panel.set_size_request(920, 142);
 
-        let heading = gtk::Label::new(Some("Switch windows"));
-        heading.add_css_class("switcher-heading");
-        heading.set_halign(gtk::Align::Start);
-        heading.set_ellipsize(pango::EllipsizeMode::End);
-        panel.append(&heading);
-
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("switcher-row");
         row.set_halign(gtk::Align::Center);
+        row.set_valign(gtk::Align::Center);
         panel.append(&row);
 
         window.set_child(Some(&panel));
@@ -371,7 +367,6 @@ fn run_daemon() -> Result<()> {
         let state = Rc::new(RefCell::new(SwitcherState {
             window: window.clone(),
             row: row.clone(),
-            heading: heading.clone(),
             items: Vec::new(),
             selected: 0,
             open: false,
@@ -539,14 +534,6 @@ impl SwitcherState {
     fn render(&self) {
         self.clear();
 
-        if let Some(selected) = self.items.get(self.selected) {
-            self.heading.set_label(&format!(
-                "{} items - {}",
-                self.items.len(),
-                selected.display_name()
-            ));
-        }
-
         for (idx, item) in self.items.iter().enumerate() {
             self.row.append(&item_card(item, idx == self.selected));
         }
@@ -578,14 +565,21 @@ fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
 
     let icon = gtk::Image::from_icon_name(item.icon_name());
     icon.add_css_class("switcher-icon");
-    icon.set_pixel_size(44);
+    icon.set_pixel_size(36);
     icon.set_halign(gtk::Align::Center);
     card.append(&icon);
+
+    let app = gtk::Label::new(Some(&item.app_label()));
+    app.add_css_class("switcher-app");
+    app.set_ellipsize(pango::EllipsizeMode::End);
+    app.set_max_width_chars(18);
+    app.set_halign(gtk::Align::Center);
+    card.append(&app);
 
     let title = gtk::Label::new(Some(&item.short_title()));
     title.add_css_class("switcher-title");
     title.set_ellipsize(pango::EllipsizeMode::End);
-    title.set_max_width_chars(18);
+    title.set_max_width_chars(20);
     title.set_lines(2);
     title.set_wrap(true);
     title.set_halign(gtk::Align::Center);
@@ -625,6 +619,13 @@ impl SwitchItem {
         }
     }
 
+    fn app_label(&self) -> String {
+        match self {
+            Self::Window(window) => app_display_name(&window.wm_class).to_string(),
+            Self::Workspace(workspace) => format!("Workspace {}", workspace.name),
+        }
+    }
+
     fn meta_text(&self) -> String {
         match self {
             Self::Window(window) => {
@@ -656,11 +657,11 @@ impl SwitchItem {
 impl WindowInfo {
     fn display_name(&self) -> String {
         if !self.title.trim().is_empty() && !self.wm_class.trim().is_empty() {
-            format!("{}: {}", self.wm_class, self.title)
+            format!("{}: {}", app_display_name(&self.wm_class), self.title)
         } else if !self.title.trim().is_empty() {
             self.title.clone()
         } else if !self.wm_class.trim().is_empty() {
-            self.wm_class.clone()
+            app_display_name(&self.wm_class).to_string()
         } else {
             self.address.clone()
         }
@@ -670,7 +671,7 @@ impl WindowInfo {
         if !self.title.trim().is_empty() {
             self.title.clone()
         } else if !self.wm_class.trim().is_empty() {
-            self.wm_class.clone()
+            app_display_name(&self.wm_class).to_string()
         } else {
             self.address.clone()
         }
@@ -707,6 +708,26 @@ fn icon_name(class_name: &str) -> &'static str {
         "spotify" => "spotify",
         "obsidian" => "obsidian",
         _ => "application-x-executable",
+    }
+}
+
+fn app_display_name(class_name: &str) -> &'static str {
+    let normalized = class_name.to_ascii_lowercase();
+    match normalized.as_str() {
+        "zen" => "Zen Browser",
+        "firefox" => "Firefox",
+        "chromium" => "Chromium",
+        "google-chrome" | "chrome" => "Chrome",
+        "chrome-github.com__-default" => "GitHub",
+        "code" | "visual studio code" => "VS Code",
+        "dev.zed.zed" | "zed" => "Zed",
+        "alacritty" => "Alacritty",
+        "kitty" => "Kitty",
+        "org.gnome.nautilus" | "nautilus" => "Files",
+        "signal" | "signal-desktop" => "Signal",
+        "spotify" => "Spotify",
+        "obsidian" => "Obsidian",
+        _ => "Application",
     }
 }
 
