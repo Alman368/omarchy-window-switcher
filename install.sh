@@ -29,10 +29,8 @@ bindd = ALT SHIFT, TAB, Window switcher previous, exec, $bindir/omarchy-window-s
 bindd = SUPER, TAB, Window switcher workspace next, exec, $bindir/omarchy-window-switcherctl open --profile super next
 bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, $bindir/omarchy-window-switcherctl open --profile super prev
 
-binddrt = ALT, Alt_L, Window switcher close, exec, $bindir/omarchy-window-switcherctl close
-binddrt = ALT, Alt_R, Window switcher close, exec, $bindir/omarchy-window-switcherctl close
-binddrt = SUPER, Super_L, Window switcher close, exec, $bindir/omarchy-window-switcherctl close
-binddrt = SUPER, Super_R, Window switcher close, exec, $bindir/omarchy-window-switcherctl close
+# Do not add bindr/binddrt close bindings. The GTK overlay captures modifier
+# release itself; Hyprland release binds can fire when Tab is released.
 
 Optional:
 bindd = SUPER, GRAVE, Window switcher cancel, exec, $bindir/omarchy-window-switcherctl cancel

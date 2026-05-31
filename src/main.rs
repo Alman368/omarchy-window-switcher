@@ -23,60 +23,66 @@ use std::time::{Duration, Instant};
 const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
 const NAMESPACE: &str = "omarchy_window_switcher";
 const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
-const CLOSE_RACE_GRACE: Duration = Duration::from_millis(350);
 const INITIAL_TAB_SUPPRESSION_GRACE: Duration = Duration::from_millis(180);
+const MODIFIER_STATE_SETTLE_GRACE: Duration = Duration::from_millis(45);
+const MODIFIER_RELEASE_CONFIRM_SAMPLES: u8 = 2;
+const PANEL_MIN_WIDTH: i32 = 260;
+const PANEL_MAX_WIDTH: i32 = 1180;
+const PANEL_ITEM_WIDTH: i32 = 172;
+const PANEL_HORIZONTAL_PADDING: i32 = 28;
+const PANEL_HEIGHT: i32 = 154;
 const CSS: &str = r#"
 window {
   background: transparent;
 }
 
 .switcher-panel {
-  background: rgba(18, 20, 24, 0.98);
-  border: 1px solid rgba(210, 218, 230, 0.18);
-  border-radius: 8px;
-  padding: 14px;
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38);
+  background: rgba(12, 13, 15, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 15px;
+  padding: 9px 12px 8px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
 }
 
 .switcher-row {
-  border-spacing: 10px;
+  border-spacing: 8px;
 }
 
 .switcher-card {
-  background: rgba(37, 41, 49, 0.98);
-  border: 2px solid rgba(210, 218, 230, 0.14);
-  border-radius: 8px;
-  padding: 14px;
-  min-width: 176px;
-  min-height: 138px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 9px 7px;
+  min-width: 146px;
+  min-height: 122px;
 }
 
 .switcher-card.selected {
-  background: rgba(48, 59, 76, 1.0);
-  border-color: rgba(88, 166, 255, 0.96);
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .switcher-icon {
-  margin-bottom: 9px;
+  margin-bottom: 8px;
 }
 
 .switcher-app {
-  color: rgba(221, 228, 238, 0.96);
+  color: rgba(250, 252, 255, 0.98);
   font-size: 12px;
   font-weight: 700;
   margin-bottom: 5px;
 }
 
 .switcher-title {
-  color: rgba(248, 250, 252, 0.98);
-  font-size: 13px;
+  color: rgba(224, 230, 240, 0.92);
+  font-size: 11px;
   font-weight: 500;
 }
 
 .switcher-meta {
-  color: rgba(185, 195, 210, 0.86);
-  font-size: 11px;
-  margin-top: 7px;
+  color: rgba(190, 200, 214, 0.82);
+  font-size: 10px;
+  margin-top: 5px;
 }
 "#;
 
@@ -288,12 +294,14 @@ enum SwitchItem {
 
 struct SwitcherState {
     window: gtk::ApplicationWindow,
+    panel: gtk::Box,
     row: gtk::Box,
     items: Vec<SwitchItem>,
     selected: usize,
     open: bool,
-    pending_close_until: Option<Instant>,
     ignore_initial_tab_until: Option<Instant>,
+    modifier_watch_started_at: Option<Instant>,
+    modifier_release_misses: u8,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -374,8 +382,8 @@ fn run_daemon() -> Result<()> {
             .title("Omarchy Window Switcher")
             .decorated(false)
             .resizable(false)
-            .default_width(1080)
-            .default_height(204)
+            .default_width(PANEL_MIN_WIDTH)
+            .default_height(PANEL_HEIGHT)
             .build();
         window.init_layer_shell();
         window.set_namespace(Some(NAMESPACE));
@@ -386,9 +394,8 @@ fn run_daemon() -> Result<()> {
         panel.add_css_class("switcher-panel");
         panel.set_halign(gtk::Align::Center);
         panel.set_valign(gtk::Align::Center);
-        panel.set_size_request(1080, 180);
 
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("switcher-row");
         row.set_halign(gtk::Align::Center);
         row.set_valign(gtk::Align::Center);
@@ -406,12 +413,14 @@ fn run_daemon() -> Result<()> {
 
         let state = Rc::new(RefCell::new(SwitcherState {
             window: window.clone(),
+            panel: panel.clone(),
             row: row.clone(),
             items: Vec::new(),
             selected: 0,
             open: false,
-            pending_close_until: None,
             ignore_initial_tab_until: None,
+            modifier_watch_started_at: None,
+            modifier_release_misses: 0,
             active_profile: None,
             config: load_config(),
         }));
@@ -422,6 +431,7 @@ fn run_daemon() -> Result<()> {
             while let Ok(command) = rx.try_recv() {
                 state.borrow_mut().handle(command);
             }
+            state.borrow_mut().close_if_active_modifier_is_up();
             ControlFlow::Continue
         });
     });
@@ -521,7 +531,7 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
             key,
             gdk::Key::Alt_L | gdk::Key::Alt_R | gdk::Key::Super_L | gdk::Key::Super_R
         ) {
-            state_released.borrow_mut().handle(IpcCommand::Close);
+            state_released.borrow_mut().close(true);
         }
     });
 
@@ -547,21 +557,22 @@ impl SwitcherState {
         self.config = load_config();
         let settings = self.config.profile(request.profile);
         match collect_items(settings) {
-            Ok(items) if !items.is_empty() => {
+            Ok(items) if should_open_switcher(settings, items.len()) => {
+                let now = Instant::now();
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
                 self.open = true;
-                self.ignore_initial_tab_until =
-                    Some(Instant::now() + INITIAL_TAB_SUPPRESSION_GRACE);
+                self.ignore_initial_tab_until = Some(now + INITIAL_TAB_SUPPRESSION_GRACE);
+                self.modifier_watch_started_at = Some(now);
+                self.modifier_release_misses = 0;
                 self.active_profile = Some(request.profile);
                 self.render();
                 self.window.present();
                 self.window.grab_focus();
-                if self.consume_pending_close() {
-                    self.close(true);
-                }
             }
-            Ok(_) => {}
+            Ok(_) => {
+                self.ignore_initial_tab_until = None;
+            }
             Err(err) => eprintln!("omarchy-window-switcher: failed to collect items: {err:#}"),
         }
     }
@@ -599,14 +610,12 @@ impl SwitcherState {
 
     fn close(&mut self, should_focus: bool) {
         if !self.open {
-            if should_focus {
-                self.pending_close_until = Some(Instant::now() + CLOSE_RACE_GRACE);
-            }
             return;
         }
 
-        self.pending_close_until = None;
         self.ignore_initial_tab_until = None;
+        self.modifier_watch_started_at = None;
+        self.modifier_release_misses = 0;
         self.active_profile = None;
         self.open = false;
         self.window.set_visible(false);
@@ -624,16 +633,38 @@ impl SwitcherState {
         }
     }
 
-    fn consume_pending_close(&mut self) -> bool {
-        let Some(deadline) = self.pending_close_until.take() else {
-            return false;
+    fn close_if_active_modifier_is_up(&mut self) {
+        if !self.open {
+            return;
+        }
+
+        let Some(started_at) = self.modifier_watch_started_at else {
+            return;
         };
 
-        Instant::now() <= deadline
+        if Instant::now().duration_since(started_at) < MODIFIER_STATE_SETTLE_GRACE {
+            return;
+        }
+
+        let Some(profile) = self.active_profile else {
+            return;
+        };
+
+        let Some(modifier_is_down) = active_modifier_is_down(profile) else {
+            return;
+        };
+
+        if should_close_from_modifier_poll(&mut self.modifier_release_misses, modifier_is_down) {
+            self.close(true);
+        }
     }
 
     fn render(&self) {
         self.clear();
+        let width = panel_width(self.items.len());
+        self.window.set_default_size(width, PANEL_HEIGHT);
+        self.window.set_size_request(width, PANEL_HEIGHT);
+        self.panel.set_size_request(width, PANEL_HEIGHT);
 
         for (idx, item) in self.items.iter().enumerate() {
             self.row.append(&item_card(item, idx == self.selected));
@@ -657,6 +688,44 @@ fn initial_selection(len: usize, direction: Direction) -> usize {
     }
 }
 
+fn should_open_switcher(settings: ProfileSettings, item_count: usize) -> bool {
+    item_count > 0 && (settings.target != Target::Windows || item_count > 1)
+}
+
+fn should_close_from_modifier_poll(missing_samples: &mut u8, modifier_is_down: bool) -> bool {
+    if modifier_is_down {
+        *missing_samples = 0;
+        return false;
+    }
+
+    *missing_samples = missing_samples.saturating_add(1);
+    *missing_samples >= MODIFIER_RELEASE_CONFIRM_SAMPLES
+}
+
+fn active_modifier_is_down(profile: Profile) -> Option<bool> {
+    let state = gdk::Display::default()?
+        .default_seat()?
+        .keyboard()?
+        .modifier_state();
+    Some(modifier_is_down(profile, state))
+}
+
+fn modifier_is_down(profile: Profile, state: gdk::ModifierType) -> bool {
+    state.contains(modifier_mask(profile))
+}
+
+fn modifier_mask(profile: Profile) -> gdk::ModifierType {
+    match profile {
+        Profile::Alt => gdk::ModifierType::ALT_MASK,
+        Profile::Super => gdk::ModifierType::SUPER_MASK,
+    }
+}
+
+fn panel_width(item_count: usize) -> i32 {
+    let width = PANEL_HORIZONTAL_PADDING + PANEL_ITEM_WIDTH * item_count as i32;
+    width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+}
+
 fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("switcher-card");
@@ -666,7 +735,7 @@ fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
 
     let icon = gtk::Image::from_icon_name(item.icon_name());
     icon.add_css_class("switcher-icon");
-    icon.set_pixel_size(44);
+    icon.set_pixel_size(52);
     icon.set_halign(gtk::Align::Center);
     card.append(&icon);
 
@@ -680,9 +749,8 @@ fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
     let title = gtk::Label::new(Some(&item.short_title()));
     title.add_css_class("switcher-title");
     title.set_ellipsize(pango::EllipsizeMode::End);
-    title.set_max_width_chars(24);
-    title.set_lines(2);
-    title.set_wrap(true);
+    title.set_max_width_chars(20);
+    title.set_lines(1);
     title.set_halign(gtk::Align::Center);
     title.set_justify(gtk::Justification::Center);
     card.append(&title);
@@ -690,6 +758,8 @@ fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
     let meta_text = item.meta_text();
     let meta = gtk::Label::new(Some(&meta_text));
     meta.add_css_class("switcher-meta");
+    meta.set_ellipsize(pango::EllipsizeMode::End);
+    meta.set_max_width_chars(16);
     meta.set_halign(gtk::Align::Center);
     card.append(&meta);
 
@@ -1120,16 +1190,16 @@ fn focus_item(item: &SwitchItem) -> Result<()> {
 }
 
 fn focus_window(window: &WindowInfo) -> Result<()> {
+    let selector = format!("address:{}", window.address);
+    let mut commands = Vec::with_capacity(3);
+
     if window.workspace_id > 0 {
-        focus_workspace(window.workspace_id)?;
+        commands.push(format!("dispatch workspace {}", window.workspace_id));
     }
-    hyprctl(&[
-        "dispatch",
-        "focuswindow",
-        &format!("address:{}", window.address),
-    ])?;
-    let _ = hyprctl(&["dispatch", "bringactivetotop"]);
-    Ok(())
+
+    commands.push(format!("dispatch focuswindow {selector}"));
+    commands.push(format!("dispatch alterzorder top,{selector}"));
+    hyprctl_batch(&commands)
 }
 
 fn focus_workspace(workspace_id: i64) -> Result<()> {
@@ -1150,6 +1220,24 @@ fn hyprctl(args: &[&str]) -> Result<()> {
         bail!(
             "hyprctl {} failed: {}",
             args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(())
+}
+
+fn hyprctl_batch(commands: &[String]) -> Result<()> {
+    let batch = commands.join(";");
+    let output = Command::new("hyprctl")
+        .args(["--batch", &batch])
+        .output()
+        .with_context(|| format!("failed to run hyprctl --batch {batch}"))?;
+
+    if !output.status.success() {
+        bail!(
+            "hyprctl --batch {} failed: {}",
+            batch,
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
@@ -1339,6 +1427,86 @@ mod tests {
     fn initial_prev_wraps_to_oldest_window() {
         assert_eq!(initial_selection(1, Direction::Prev), 0);
         assert_eq!(initial_selection(4, Direction::Prev), 3);
+    }
+
+    #[test]
+    fn windows_need_a_second_candidate_to_open_switcher() {
+        let settings = ProfileSettings {
+            target: Target::Windows,
+            scope: Scope::CurrentMonitor,
+            same_class: false,
+            include_special_workspaces: false,
+            include_empty_workspaces: false,
+        };
+
+        assert!(!should_open_switcher(settings, 0));
+        assert!(!should_open_switcher(settings, 1));
+        assert!(should_open_switcher(settings, 2));
+    }
+
+    #[test]
+    fn non_window_targets_can_open_with_one_candidate() {
+        let settings = ProfileSettings {
+            target: Target::Workspaces,
+            scope: Scope::CurrentMonitor,
+            same_class: false,
+            include_special_workspaces: false,
+            include_empty_workspaces: false,
+        };
+
+        assert!(!should_open_switcher(settings, 0));
+        assert!(should_open_switcher(settings, 1));
+    }
+
+    #[test]
+    fn modifier_poll_waits_for_confirmed_release() {
+        let mut missing_samples = 0;
+
+        assert!(!should_close_from_modifier_poll(&mut missing_samples, true));
+        assert_eq!(missing_samples, 0);
+
+        assert!(!should_close_from_modifier_poll(
+            &mut missing_samples,
+            false
+        ));
+        assert_eq!(missing_samples, 1);
+
+        assert!(should_close_from_modifier_poll(&mut missing_samples, false));
+        assert_eq!(missing_samples, MODIFIER_RELEASE_CONFIRM_SAMPLES);
+    }
+
+    #[test]
+    fn modifier_poll_resets_when_modifier_returns() {
+        let mut missing_samples = 1;
+
+        assert!(!should_close_from_modifier_poll(&mut missing_samples, true));
+        assert_eq!(missing_samples, 0);
+    }
+
+    #[test]
+    fn modifier_state_matches_profile_mask() {
+        assert!(modifier_is_down(
+            Profile::Alt,
+            gdk::ModifierType::ALT_MASK | gdk::ModifierType::SHIFT_MASK
+        ));
+        assert!(!modifier_is_down(
+            Profile::Super,
+            gdk::ModifierType::ALT_MASK | gdk::ModifierType::SHIFT_MASK
+        ));
+        assert!(modifier_is_down(
+            Profile::Super,
+            gdk::ModifierType::SUPER_MASK
+        ));
+    }
+
+    #[test]
+    fn panel_width_tracks_item_count_without_using_a_fixed_full_width() {
+        assert_eq!(panel_width(0), PANEL_MIN_WIDTH);
+        assert_eq!(
+            panel_width(3),
+            PANEL_HORIZONTAL_PADDING + PANEL_ITEM_WIDTH * 3
+        );
+        assert_eq!(panel_width(50), PANEL_MAX_WIDTH);
     }
 
     #[test]

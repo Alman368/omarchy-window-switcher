@@ -176,12 +176,12 @@ bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy
 bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile alt prev
 bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super next
 bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super prev
-
-binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
-binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
-binddrt = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
-binddrt = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
 ```
+
+No anadas binds `bindr`/`binddrt` para cerrar al soltar `Alt` o `Super`.
+El overlay GTK captura ese release cuando esta abierto. En Hyprland, los binds
+de release con combinaciones pueden dispararse al soltar `Tab`, cerrando el
+switcher aunque el modificador siga pulsado.
 
 ## Desarrollo
 
