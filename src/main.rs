@@ -26,6 +26,7 @@ const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
 const INITIAL_TAB_SUPPRESSION_GRACE: Duration = Duration::from_millis(180);
 const MODIFIER_STATE_SETTLE_GRACE: Duration = Duration::from_millis(45);
 const MODIFIER_RELEASE_CONFIRM_SAMPLES: u8 = 2;
+const FOCUS_AFTER_HIDE_DELAY: Duration = Duration::from_millis(30);
 const PANEL_MIN_WIDTH: i32 = 260;
 const PANEL_MAX_WIDTH: i32 = 1180;
 const PANEL_ITEM_WIDTH: i32 = 172;
@@ -567,6 +568,7 @@ impl SwitcherState {
                 self.modifier_release_misses = 0;
                 self.active_profile = Some(request.profile);
                 self.render();
+                self.window.set_keyboard_mode(KeyboardMode::Exclusive);
                 self.window.present();
                 self.window.grab_focus();
             }
@@ -618,6 +620,7 @@ impl SwitcherState {
         self.modifier_release_misses = 0;
         self.active_profile = None;
         self.open = false;
+        self.window.set_keyboard_mode(KeyboardMode::None);
         self.window.set_visible(false);
 
         let selected = self.items.get(self.selected).cloned();
@@ -625,11 +628,8 @@ impl SwitcherState {
         self.items.clear();
         self.selected = 0;
 
-        if should_focus
-            && let Some(item) = selected
-            && let Err(err) = focus_item(&item)
-        {
-            eprintln!("omarchy-window-switcher: failed to focus item: {err:#}");
+        if should_focus && let Some(item) = selected {
+            schedule_focus_item(item);
         }
     }
 
@@ -1187,6 +1187,14 @@ fn focus_item(item: &SwitchItem) -> Result<()> {
         SwitchItem::Workspace(workspace) => focus_workspace(workspace.id),
         SwitchItem::Monitor(monitor) => focus_monitor(&monitor.name),
     }
+}
+
+fn schedule_focus_item(item: SwitchItem) {
+    glib::timeout_add_local_once(FOCUS_AFTER_HIDE_DELAY, move || {
+        if let Err(err) = focus_item(&item) {
+            eprintln!("omarchy-window-switcher: failed to focus item: {err:#}");
+        }
+    });
 }
 
 fn focus_window(window: &WindowInfo) -> Result<()> {
