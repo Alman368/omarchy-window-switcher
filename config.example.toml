@@ -2,7 +2,7 @@
 
 [alt]
 target = "windows"
-scope = "all"
+scope = "current-monitor"
 same_class = false
 include_special_workspaces = false
 
@@ -19,10 +19,15 @@ include_special_workspaces = false
 # target = "windows"
 # scope = "current-workspace"
 #
-# Windows/Super-Tab cycles windows from the current monitor:
+# Super-Tab cycles windows from the current monitor:
 # [super]
 # target = "windows"
 # scope = "current-monitor"
+#
+# Alt-Tab global across all monitors:
+# [alt]
+# target = "windows"
+# scope = "all"
 #
 # Alt-Tab limited to the current workspace:
 # [alt]

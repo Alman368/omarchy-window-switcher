@@ -223,6 +223,8 @@ struct HyprMonitorInfo {
 struct HyprActiveWindow {
     #[serde(default)]
     address: String,
+    #[serde(default)]
+    monitor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,7 +306,7 @@ impl Default for ProfileSettings {
     fn default() -> Self {
         Self {
             target: Target::Windows,
-            scope: Scope::All,
+            scope: Scope::CurrentMonitor,
             same_class: false,
             include_special_workspaces: false,
             include_empty_workspaces: false,
@@ -317,7 +319,7 @@ impl Default for AppConfig {
         Self {
             alt: ProfileSettings {
                 target: Target::Windows,
-                scope: Scope::All,
+                scope: Scope::CurrentMonitor,
                 same_class: false,
                 include_special_workspaces: false,
                 include_empty_workspaces: false,
@@ -909,9 +911,7 @@ fn collect_windows(settings: ProfileSettings) -> Result<Vec<WindowInfo>> {
         hyprctl_json(&["activeworkspace", "-j"]).ok();
     let active_address = active.as_ref().map(|a| a.address.clone());
     let active_workspace_id = active_workspace.as_ref().map(|workspace| workspace.id);
-    let active_monitor_id = active_workspace
-        .as_ref()
-        .map(|workspace| workspace.monitor_id);
+    let active_monitor_id = current_monitor_id(active.as_ref(), active_workspace.as_ref());
     let active_class = active_address.as_ref().and_then(|active_address| {
         clients
             .iter()
@@ -1080,6 +1080,19 @@ fn client_class(client: &HyprClient) -> String {
     } else {
         client.wm_class.clone()
     }
+}
+
+fn current_monitor_id(
+    active: Option<&HyprActiveWindow>,
+    active_workspace: Option<&HyprActiveWorkspace>,
+) -> Option<i64> {
+    active
+        .and_then(|window| window.monitor.filter(|monitor| *monitor >= 0))
+        .or_else(|| {
+            active_workspace
+                .map(|workspace| workspace.monitor_id)
+                .filter(|monitor| *monitor >= 0)
+        })
 }
 
 impl Scope {
@@ -1368,14 +1381,14 @@ mod tests {
     }
 
     #[test]
-    fn default_config_is_global_alt_and_monitor_scoped_super() {
+    fn default_config_scopes_alt_and_super_to_current_monitor() {
         let config = AppConfig::default();
 
         assert_eq!(
             config.profile(Profile::Alt),
             ProfileSettings {
                 target: Target::Windows,
-                scope: Scope::All,
+                scope: Scope::CurrentMonitor,
                 same_class: false,
                 include_special_workspaces: false,
                 include_empty_workspaces: false,
@@ -1426,6 +1439,28 @@ mod tests {
     }
 
     #[test]
+    fn partial_alt_config_defaults_to_current_monitor() {
+        let config = toml::from_str::<AppConfig>(
+            r#"
+            [alt]
+            same_class = true
+            "#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(
+            config.profile(Profile::Alt),
+            ProfileSettings {
+                target: Target::Windows,
+                scope: Scope::CurrentMonitor,
+                same_class: true,
+                include_special_workspaces: false,
+                include_empty_workspaces: false,
+            }
+        );
+    }
+
+    #[test]
     fn extended_profile_config_parses() {
         let config = toml::from_str::<AppConfig>(
             r#"
@@ -1455,6 +1490,57 @@ mod tests {
     fn scope_current_monitor_matches_only_active_monitor() {
         assert!(Scope::CurrentMonitor.includes(6, 1, Some(6), Some(1)));
         assert!(!Scope::CurrentMonitor.includes(2, 0, Some(6), Some(1)));
+    }
+
+    #[test]
+    fn current_monitor_prefers_active_window_monitor() {
+        let active = HyprActiveWindow {
+            address: "0x1".to_string(),
+            monitor: Some(2),
+        };
+        let active_workspace = HyprActiveWorkspace {
+            id: 8,
+            monitor_id: 1,
+        };
+
+        assert_eq!(
+            current_monitor_id(Some(&active), Some(&active_workspace)),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn current_monitor_falls_back_to_active_workspace_monitor() {
+        let active = HyprActiveWindow {
+            address: "0x1".to_string(),
+            monitor: None,
+        };
+        let active_workspace = HyprActiveWorkspace {
+            id: 8,
+            monitor_id: 1,
+        };
+
+        assert_eq!(
+            current_monitor_id(Some(&active), Some(&active_workspace)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn current_monitor_ignores_invalid_active_window_monitor() {
+        let active = HyprActiveWindow {
+            address: "0x1".to_string(),
+            monitor: Some(-1),
+        };
+        let active_workspace = HyprActiveWorkspace {
+            id: 8,
+            monitor_id: 1,
+        };
+
+        assert_eq!(
+            current_monitor_id(Some(&active), Some(&active_workspace)),
+            Some(1)
+        );
     }
 
     #[test]

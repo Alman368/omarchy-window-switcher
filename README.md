@@ -40,6 +40,8 @@ Para instalar el binario:
 ```
 
 Esto instala `omarchy-window-switcher` en `~/.local/bin`.
+Tambien instala `omarchy-window-switcherctl`, un cliente ligero para usar en
+los binds sin cargar GTK en cada pulsacion.
 
 Ejecuta el daemon:
 
@@ -50,12 +52,12 @@ omarchy-window-switcher run
 Comandos principales:
 
 ```bash
-omarchy-window-switcher open --profile alt next
-omarchy-window-switcher open --profile alt prev
-omarchy-window-switcher open --profile super next
-omarchy-window-switcher open --profile super prev
-omarchy-window-switcher close
-omarchy-window-switcher cancel
+omarchy-window-switcherctl open --profile alt next
+omarchy-window-switcherctl open --profile alt prev
+omarchy-window-switcherctl open --profile super next
+omarchy-window-switcherctl open --profile super prev
+omarchy-window-switcherctl close
+omarchy-window-switcherctl cancel
 ```
 
 Para ver que detecta el switcher:
@@ -72,7 +74,7 @@ El comportamiento por defecto es:
 ```toml
 [alt]
 target = "windows"
-scope = "all"
+scope = "current-monitor"
 same_class = false
 include_special_workspaces = false
 
@@ -100,14 +102,22 @@ Valores soportados:
 Configuraciones habituales:
 
 ```toml
-# Nuestro uso: Alt-Tab global entre ventanas, Super-Tab entre workspaces del monitor actual.
+# Nuestro uso: Alt-Tab entre ventanas del monitor actual,
+# Super-Tab entre workspaces del monitor actual.
 [alt]
 target = "windows"
-scope = "all"
+scope = "current-monitor"
 
 [super]
 target = "workspaces"
 scope = "current-monitor"
+```
+
+```toml
+# Alt-Tab global entre ventanas de todos los monitores.
+[alt]
+target = "windows"
+scope = "all"
 ```
 
 ```toml
@@ -162,15 +172,15 @@ unbind = ALT SHIFT, TAB
 unbind = SUPER, TAB
 unbind = SUPER SHIFT, TAB
 
-bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt next
-bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile alt prev
-bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super next
-bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcher open --profile super prev
+bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile alt next
+bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile alt prev
+bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super next
+bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super prev
 
-binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-binddrt = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
-binddrt = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcher close
+binddrt = ALT, Alt_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
+binddrt = ALT, Alt_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
+binddrt = SUPER, Super_L, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
+binddrt = SUPER, Super_R, Window switcher close, exec, /home/your-user/.local/bin/omarchy-window-switcherctl close
 ```
 
 ## Desarrollo
