@@ -1,170 +1,46 @@
 # Omarchy Window Switcher
 
-Switcher de ventanas tipo Windows Alt-Tab para Omarchy/Hyprland.
+Switcher de ventanas tipo Alt-Tab para Omarchy/Hyprland.
 
 ## Que hace
 
-Reemplaza el flujo de `ALT+TAB` y `SUPER+TAB` por un selector rapido con orden MRU
-`most recently used`.
+Reemplaza el Alt-Tab de Hyprland por un selector MRU, similar al comportamiento clasico de Windows.
 
-- `ALT+TAB` cambia entre ventanas recientes. Por defecto lo hace de forma global,
-  independientemente del workspace.
-- `SUPER+TAB` cambia entre workspaces recientes, limitado al monitor actual.
-- La interfaz visual aparece como una capa GTK4/layer-shell centrada en pantalla.
-- El daemon recibe los atajos por socket Unix para que el cambio sea inmediato.
+- `ALT+TAB` cambia entre ventanas recientes del monitor actual.
+- `ALT+SHIFT+TAB` recorre la lista en sentido inverso.
+- `SUPER+TAB` puede usarse para cambiar entre workspaces recientes.
+- La interfaz corre como daemon GTK4/layer-shell y recibe los atajos por socket Unix para que la respuesta sea rapida.
 
 ## Por que es util
 
-Hyprland ya permite ciclar ventanas y workspaces, pero el comportamiento por
-defecto no replica bien el Alt-Tab clasico: MRU real, interfaz visible y foco al
-soltar el modificador.
+Hyprland ya permite ciclar ventanas, pero no replica bien el flujo clasico de Alt-Tab: mantener `Alt`, pulsar `Tab` varias veces y cambiar solo al soltar el modificador.
 
-Este proyecto deja solo esa ruta critica, sin launcher, plugins ni indexado de
-aplicaciones. Esta pensado para Omarchy y para tocar lo minimo de la configuracion
-del sistema: solo los binds de `ALT+TAB`, `SUPER+TAB` y el autostart del daemon.
-
-## Requisitos
-
-- Omarchy / Hyprland
-- `hyprctl`
-- Rust 1.91+
-- `gtk4`
-- `gtk4-layer-shell`
+Este proyecto resuelve ese caso concreto para Omarchy, incluyendo ventanas del mismo monitor y evitando races habituales de Hyprland con binds de release.
 
 ## Como usarlo
 
-Para instalar el binario:
+Para instalar los binarios:
 
 ```bash
 ./install.sh
 ```
 
-Esto instala `omarchy-window-switcher` en `~/.local/bin`.
-Tambien instala `omarchy-window-switcherctl`, un cliente ligero para usar en
-los binds sin cargar GTK en cada pulsacion.
+Necesitas tener disponibles `hyprctl`, Rust, GTK4 y gtk4-layer-shell.
 
-Ejecuta el daemon:
+Esto instala:
 
 ```bash
-omarchy-window-switcher run
+~/.local/bin/omarchy-window-switcher
+~/.local/bin/omarchy-window-switcherctl
 ```
 
-Comandos principales:
-
-```bash
-omarchy-window-switcherctl open --profile alt next
-omarchy-window-switcherctl open --profile alt prev
-omarchy-window-switcherctl open --profile super next
-omarchy-window-switcherctl open --profile super prev
-omarchy-window-switcherctl close
-omarchy-window-switcherctl cancel
-```
-
-Para ver que detecta el switcher:
-
-```bash
-omarchy-window-switcher list
-omarchy-window-switcher list --profile super
-```
-
-## Configuracion
-
-El comportamiento por defecto es:
-
-```toml
-[alt]
-target = "windows"
-scope = "current-monitor"
-same_class = false
-include_special_workspaces = false
-
-[super]
-target = "workspaces"
-scope = "current-monitor"
-include_empty_workspaces = false
-include_special_workspaces = false
-```
-
-Para cambiarlo, copia `config.example.toml` a:
-
-```bash
-~/.config/omarchy-window-switcher/config.toml
-```
-
-Valores soportados:
-
-- `target`: `windows`, `workspaces`, `monitors`
-- `scope`: `all`, `current-workspace`, `current-monitor`
-- `same_class`: `true` para limitar ventanas a la misma app/clase
-- `include_special_workspaces`: `true` para incluir scratchpads/special workspaces
-- `include_empty_workspaces`: `true` para incluir workspaces sin ventanas al usar `target = "workspaces"`
-
-Configuraciones habituales:
-
-```toml
-# Nuestro uso: Alt-Tab entre ventanas del monitor actual,
-# Super-Tab entre workspaces del monitor actual.
-[alt]
-target = "windows"
-scope = "current-monitor"
-
-[super]
-target = "workspaces"
-scope = "current-monitor"
-```
-
-```toml
-# Alt-Tab global entre ventanas de todos los monitores.
-[alt]
-target = "windows"
-scope = "all"
-```
-
-```toml
-# Super-Tab entre ventanas del workspace actual.
-[super]
-target = "windows"
-scope = "current-workspace"
-```
-
-```toml
-# Alt-Tab limitado al workspace actual.
-[alt]
-target = "windows"
-scope = "current-workspace"
-```
-
-```toml
-# Alt-Tab entre ventanas del monitor actual.
-[alt]
-target = "windows"
-scope = "current-monitor"
-```
-
-```toml
-# Cambiar solo entre ventanas de la misma app.
-[alt]
-target = "windows"
-scope = "all"
-same_class = true
-```
-
-```toml
-# Super-Tab entre monitores.
-[super]
-target = "monitors"
-scope = "all"
-```
-
-## Hyprland
-
-Autostart en `~/.config/hypr/autostart.conf`:
+Anade el daemon al autostart de Hyprland:
 
 ```ini
 exec-once = /home/your-user/.local/bin/omarchy-window-switcher run
 ```
 
-Binds en `~/.config/hypr/bindings.conf`:
+Y configura los binds:
 
 ```ini
 unbind = ALT, TAB
@@ -178,12 +54,32 @@ bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local
 bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super prev
 ```
 
-No anadas binds `bindr`/`binddrt` para cerrar al soltar `Alt` o `Super`.
-El overlay GTK captura ese release cuando esta abierto. En Hyprland, los binds
-de release con combinaciones pueden dispararse al soltar `Tab`, cerrando el
-switcher aunque el modificador siga pulsado.
+No anadas binds `bindr`/`binddrt` para cerrar al soltar `Alt` o `Super`. El overlay captura ese release por GTK; en Hyprland esos binds pueden dispararse al soltar `Tab`.
 
-## Desarrollo
+Para ver que ventanas detecta:
+
+```bash
+omarchy-window-switcher list --profile alt
+```
+
+Para configurar el comportamiento:
+
+```bash
+mkdir -p ~/.config/omarchy-window-switcher
+cp config.example.toml ~/.config/omarchy-window-switcher/config.toml
+```
+
+La configuracion por defecto usa:
+
+```toml
+[alt]
+target = "windows"
+scope = "current-monitor"
+
+[super]
+target = "workspaces"
+scope = "current-monitor"
+```
 
 Antes de subir cambios:
 
@@ -194,17 +90,9 @@ cargo clippy -- -D warnings
 cargo build --release
 ```
 
-Si se cambia configuracion de Hyprland:
-
-```bash
-hyprctl reload
-hyprctl configerrors
-```
-
 ## Contribuir
 
-Las pull requests son bienvenidas. Para cambios grandes, abre primero una issue
-explicando el comportamiento esperado y como probarlo en Hyprland/Omarchy.
+Las issues y pull requests son bienvenidas. Si el cambio toca comportamiento de foco o binds de Hyprland, explica como reproducirlo.
 
 ## Licencia
 

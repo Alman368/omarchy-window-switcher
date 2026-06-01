@@ -5,6 +5,11 @@ edition = "2024"
 rust-version = "1.91"
 description = "Fast Windows-style MRU Alt-Tab switcher for Omarchy/Hyprland"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Alman368/omarchy-window-switcher"
+keywords = ["omarchy", "hyprland", "alt-tab", "wayland", "window-switcher"]
+categories = ["command-line-utilities", "gui"]
+default-run = "omarchy-window-switcher"
 
 [dependencies]
 anyhow = "1.0"

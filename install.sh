@@ -5,7 +5,12 @@ prefix="${PREFIX:-$HOME/.local}"
 bindir="$prefix/bin"
 source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-cargo build --release --manifest-path "$source_dir/Cargo.toml"
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo is required to build omarchy-window-switcher" >&2
+  exit 1
+fi
+
+cargo build --release --locked --manifest-path "$source_dir/Cargo.toml"
 
 mkdir -p "$bindir"
 install -m 0755 "$source_dir/target/release/omarchy-window-switcher" "$bindir/omarchy-window-switcher"
