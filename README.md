@@ -1,46 +1,46 @@
 # Omarchy Window Switcher
 
-Switcher de ventanas tipo Alt-Tab para Omarchy/Hyprland.
+Alt-Tab window switcher for Omarchy/Hyprland.
 
-## Que hace
+## What It Does
 
-Reemplaza el Alt-Tab de Hyprland por un selector MRU, similar al comportamiento clasico de Windows.
+Replaces Hyprland's Alt-Tab flow with an MRU switcher, similar to the classic Windows behavior.
 
-- `ALT+TAB` cambia entre ventanas recientes del monitor actual.
-- `ALT+SHIFT+TAB` recorre la lista en sentido inverso.
-- `SUPER+TAB` puede usarse para cambiar entre workspaces recientes.
-- La interfaz corre como daemon GTK4/layer-shell y recibe los atajos por socket Unix para que la respuesta sea rapida.
+- `ALT+TAB` switches between recent windows on the current monitor.
+- `ALT+SHIFT+TAB` cycles in reverse.
+- `SUPER+TAB` can be used to switch between recent workspaces.
+- The UI runs as a GTK4/layer-shell daemon and receives shortcuts through a Unix socket for fast response.
 
-## Por que es util
+## Why It Is Useful
 
-Hyprland ya permite ciclar ventanas, pero no replica bien el flujo clasico de Alt-Tab: mantener `Alt`, pulsar `Tab` varias veces y cambiar solo al soltar el modificador.
+Hyprland can already cycle windows, but it does not fully replicate the classic Alt-Tab flow: hold `Alt`, press `Tab` multiple times, and switch only when the modifier is released.
 
-Este proyecto resuelve ese caso concreto para Omarchy, incluyendo ventanas del mismo monitor y evitando races habituales de Hyprland con binds de release.
+This project solves that specific workflow for Omarchy, including current-monitor switching and common Hyprland release-bind races.
 
-## Como usarlo
+## How To Use It
 
-Para instalar los binarios:
+Install the binaries:
 
 ```bash
 ./install.sh
 ```
 
-Necesitas tener disponibles `hyprctl`, Rust, GTK4 y gtk4-layer-shell.
+You need `hyprctl`, Rust, GTK4, and gtk4-layer-shell available.
 
-Esto instala:
+This installs:
 
 ```bash
 ~/.local/bin/omarchy-window-switcher
 ~/.local/bin/omarchy-window-switcherctl
 ```
 
-Anade el daemon al autostart de Hyprland:
+Add the daemon to your Hyprland autostart:
 
 ```ini
 exec-once = /home/your-user/.local/bin/omarchy-window-switcher run
 ```
 
-Y configura los binds:
+Configure the bindings:
 
 ```ini
 unbind = ALT, TAB
@@ -54,22 +54,22 @@ bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local
 bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super prev
 ```
 
-No anadas binds `bindr`/`binddrt` para cerrar al soltar `Alt` o `Super`. El overlay captura ese release por GTK; en Hyprland esos binds pueden dispararse al soltar `Tab`.
+Do not add `bindr`/`binddrt` bindings to close on `Alt` or `Super` release. The overlay captures that release through GTK; in Hyprland those bindings can fire when `Tab` is released.
 
-Para ver que ventanas detecta:
+Inspect the detected windows:
 
 ```bash
 omarchy-window-switcher list --profile alt
 ```
 
-Para configurar el comportamiento:
+Configure the behavior:
 
 ```bash
 mkdir -p ~/.config/omarchy-window-switcher
 cp config.example.toml ~/.config/omarchy-window-switcher/config.toml
 ```
 
-La configuracion por defecto usa:
+The default configuration uses:
 
 ```toml
 [alt]
@@ -81,7 +81,7 @@ target = "workspaces"
 scope = "current-monitor"
 ```
 
-Antes de subir cambios:
+Before submitting changes:
 
 ```bash
 cargo fmt
@@ -90,10 +90,10 @@ cargo clippy -- -D warnings
 cargo build --release
 ```
 
-## Contribuir
+## Contributing
 
-Las issues y pull requests son bienvenidas. Si el cambio toca comportamiento de foco o binds de Hyprland, explica como reproducirlo.
+Issues and pull requests are welcome. If a change touches focus behavior or Hyprland bindings, explain how to reproduce it.
 
-## Licencia
+## License
 
-MIT. Ver `LICENSE`.
+MIT. See `LICENSE`.
