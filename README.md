@@ -1,21 +1,23 @@
-# Omarchy Window Switcher
+# Hyprland MRU Window Switcher
 
-Alt-Tab window switcher for Omarchy/Hyprland.
+Visual MRU Alt-Tab window switcher for Hyprland, built and tested on Omarchy.
 
 ## What It Does
 
-Replaces Hyprland's Alt-Tab flow with an MRU switcher, similar to the classic Windows behavior.
+Adds a visual most-recently-used (MRU) Alt-Tab switcher for Hyprland setups.
 
-- `ALT+TAB` switches between recent windows on the current monitor.
+In Omarchy, it can replace the default `ALT+TAB` bindings, which use Hyprland's regular window cycling.
+
+- The example config maps `ALT+TAB` to the next most recently used window on the current monitor, across workspaces.
 - `ALT+SHIFT+TAB` cycles in reverse.
 - `SUPER+TAB` can be used to switch between recent workspaces.
 - The UI runs as a GTK4/layer-shell daemon and receives shortcuts through a Unix socket for fast response.
 
 ## Why It Is Useful
 
-Hyprland can already cycle windows, but it does not fully replicate the classic Alt-Tab flow: hold `Alt`, press `Tab` multiple times, and switch only when the modifier is released.
+Hyprland provides low-level window cycling and focus-history dispatchers, and some setups, including Omarchy, bind `ALT+TAB` to regular cycling by default. Those bindings focus windows immediately and do not provide a visual switcher overlay.
 
-This project solves that specific workflow for Omarchy, including current-monitor switching and common Hyprland release-bind races.
+This project adds the classic MRU Alt-Tab workflow on top of Hyprland: hold `Alt`, press `Tab` multiple times, and focus the selected window only when the modifier is released.
 
 ## How To Use It
 
@@ -80,6 +82,8 @@ scope = "current-monitor"
 target = "workspaces"
 scope = "current-monitor"
 ```
+
+You can change this in `config.toml`. Supported targets are `windows`, `workspaces`, and `monitors`; supported scopes are `current-monitor`, `current-workspace`, and `all`.
 
 Before submitting changes:
 
