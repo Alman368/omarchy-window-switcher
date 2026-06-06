@@ -1,4 +1,4 @@
-# Defaults. Copy to ~/.config/omarchy-window-switcher/config.toml to override.
+# Defaults. Copy to ~/.config/mogtab/config.toml to override.
 
 [alt]
 target = "windows"

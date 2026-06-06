@@ -592,7 +592,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omarchy-window-switcher"
+name = "mogtab"
 version = "0.1.0"
 dependencies = [
  "anyhow",

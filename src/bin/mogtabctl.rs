@@ -7,7 +7,7 @@ use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::Duration;
 
-const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
+const SOCKET_NAME: &str = "mogtab.sock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Profile {
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("omarchy-window-switcherctl: {err}");
+            eprintln!("mogtabctl: {err}");
             ExitCode::FAILURE
         }
     }
@@ -145,18 +145,18 @@ fn start_daemon() -> Result<(), String> {
 
 fn daemon_path() -> String {
     let Ok(current_exe) = env::current_exe() else {
-        return "omarchy-window-switcher".to_string();
+        return "mogtab".to_string();
     };
 
     let Some(parent) = current_exe.parent() else {
-        return "omarchy-window-switcher".to_string();
+        return "mogtab".to_string();
     };
 
-    let sibling = parent.join("omarchy-window-switcher");
+    let sibling = parent.join("mogtab");
     if fs::metadata(&sibling).is_ok() {
         sibling.to_string_lossy().into_owned()
     } else {
-        "omarchy-window-switcher".to_string()
+        "mogtab".to_string()
     }
 }
 
@@ -200,9 +200,9 @@ fn socket_path() -> PathBuf {
 
 fn help_text() -> String {
     "Usage:
-  omarchy-window-switcherctl open [--profile alt|super] [next|prev]
-  omarchy-window-switcherctl close
-  omarchy-window-switcherctl cancel"
+  mogtabctl open [--profile alt|super] [next|prev]
+  mogtabctl close
+  mogtabctl cancel"
         .to_string()
 }
 

@@ -1,4 +1,4 @@
-# Hyprland MRU Window Switcher
+# MogTab
 
 Visual MRU Alt-Tab window switcher for Hyprland, built and tested on Omarchy.
 
@@ -21,25 +21,25 @@ This project exists for that gap: it adds the classic MRU Alt-Tab workflow on to
 
 ## How To Use It
 
+You need `hyprctl`, Rust, GTK4, and gtk4-layer-shell available.
+
 Install the binaries:
 
 ```bash
 ./install.sh
 ```
 
-You need `hyprctl`, Rust, GTK4, and gtk4-layer-shell available.
-
 This installs:
 
 ```bash
-~/.local/bin/omarchy-window-switcher
-~/.local/bin/omarchy-window-switcherctl
+~/.local/bin/mogtab
+~/.local/bin/mogtabctl
 ```
 
 Add the daemon to your Hyprland autostart:
 
 ```ini
-exec-once = /home/your-user/.local/bin/omarchy-window-switcher run
+exec-once = /home/your-user/.local/bin/mogtab run
 ```
 
 Configure the bindings:
@@ -50,25 +50,40 @@ unbind = ALT SHIFT, TAB
 unbind = SUPER, TAB
 unbind = SUPER SHIFT, TAB
 
-bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile alt next
-bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile alt prev
-bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super next
-bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/omarchy-window-switcherctl open --profile super prev
+bindd = ALT, TAB, Window switcher next, exec, /home/your-user/.local/bin/mogtabctl open --profile alt next
+bindd = ALT SHIFT, TAB, Window switcher previous, exec, /home/your-user/.local/bin/mogtabctl open --profile alt prev
+bindd = SUPER, TAB, Window switcher workspace next, exec, /home/your-user/.local/bin/mogtabctl open --profile super next
+bindd = SUPER SHIFT, TAB, Window switcher workspace previous, exec, /home/your-user/.local/bin/mogtabctl open --profile super prev
 ```
 
+Replace `/home/your-user` with your actual home directory.
+
 Do not add `bindr`/`binddrt` bindings to close on `Alt` or `Super` release. The overlay captures that release through GTK; in Hyprland those bindings can fire when `Tab` is released.
+
+Reload Hyprland:
+
+```bash
+hyprctl reload
+hyprctl configerrors
+```
+
+Start the daemon for the current session, or log out and back in:
+
+```bash
+mogtab run
+```
 
 Inspect the detected windows:
 
 ```bash
-omarchy-window-switcher list --profile alt
+mogtab list --profile alt
 ```
 
 Configure the behavior:
 
 ```bash
-mkdir -p ~/.config/omarchy-window-switcher
-cp config.example.toml ~/.config/omarchy-window-switcher/config.toml
+mkdir -p ~/.config/mogtab
+cp config.example.toml ~/.config/mogtab/config.toml
 ```
 
 The default configuration uses:
@@ -85,6 +100,10 @@ scope = "current-monitor"
 
 You can change this in `config.toml`. Supported targets are `windows`, `workspaces`, and `monitors`; supported scopes are `current-monitor`, `current-workspace`, and `all`.
 
+## Contributing
+
+Issues and pull requests are welcome. If a change touches focus behavior or Hyprland bindings, explain how to reproduce it.
+
 Before submitting changes:
 
 ```bash
@@ -93,10 +112,6 @@ cargo test
 cargo clippy -- -D warnings
 cargo build --release
 ```
-
-## Contributing
-
-Issues and pull requests are welcome. If a change touches focus behavior or Hyprland bindings, explain how to reproduce it.
 
 ## License
 

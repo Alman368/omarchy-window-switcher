@@ -20,9 +20,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const APP_ID: &str = "dev.alman.OmarchyWindowSwitcher";
-const NAMESPACE: &str = "omarchy_window_switcher";
-const SOCKET_NAME: &str = "omarchy-window-switcher.sock";
+const APP_ID: &str = "dev.alman.MogTab";
+const NAMESPACE: &str = "mogtab";
+const SOCKET_NAME: &str = "mogtab.sock";
 const INITIAL_TAB_SUPPRESSION_GRACE: Duration = Duration::from_millis(180);
 const MODIFIER_STATE_SETTLE_GRACE: Duration = Duration::from_millis(45);
 const MODIFIER_RELEASE_CONFIRM_SAMPLES: u8 = 2;
@@ -88,8 +88,8 @@ window {
 "#;
 
 #[derive(Debug, Parser)]
-#[command(name = "omarchy-window-switcher")]
-#[command(about = "Windows-style MRU Alt-Tab switcher for Omarchy/Hyprland")]
+#[command(name = "mogtab")]
+#[command(about = "Visual MRU Alt-Tab switcher for Hyprland")]
 struct Cli {
     #[command(subcommand)]
     command: CliCommand,
@@ -380,7 +380,7 @@ fn run_daemon() -> Result<()> {
 
         let window = gtk::ApplicationWindow::builder()
             .application(app)
-            .title("Omarchy Window Switcher")
+            .title("MogTab")
             .decorated(false)
             .resizable(false)
             .default_width(PANEL_MIN_WIDTH)
@@ -407,7 +407,7 @@ fn run_daemon() -> Result<()> {
 
         let (tx, rx) = mpsc::channel::<IpcCommand>();
         if let Err(err) = spawn_ipc_listener(tx) {
-            eprintln!("omarchy-window-switcher: failed to start IPC listener: {err:#}");
+            eprintln!("mogtab: failed to start IPC listener: {err:#}");
             app.quit();
             return;
         }
@@ -575,7 +575,7 @@ impl SwitcherState {
             Ok(_) => {
                 self.ignore_initial_tab_until = None;
             }
-            Err(err) => eprintln!("omarchy-window-switcher: failed to collect items: {err:#}"),
+            Err(err) => eprintln!("mogtab: failed to collect items: {err:#}"),
         }
     }
 
@@ -945,10 +945,7 @@ fn load_config() -> AppConfig {
     match toml::from_str::<AppConfig>(&contents) {
         Ok(config) => config,
         Err(err) => {
-            eprintln!(
-                "omarchy-window-switcher: failed to parse {}: {err}",
-                path.display()
-            );
+            eprintln!("mogtab: failed to parse {}: {err}", path.display());
             AppConfig::default()
         }
     }
@@ -959,7 +956,7 @@ fn config_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(env::temp_dir)
-        .join("omarchy-window-switcher")
+        .join("mogtab")
         .join("config.toml")
 }
 
@@ -1192,7 +1189,7 @@ fn focus_item(item: &SwitchItem) -> Result<()> {
 fn schedule_focus_item(item: SwitchItem) {
     glib::timeout_add_local_once(FOCUS_AFTER_HIDE_DELAY, move || {
         if let Err(err) = focus_item(&item) {
-            eprintln!("omarchy-window-switcher: failed to focus item: {err:#}");
+            eprintln!("mogtab: failed to focus item: {err:#}");
         }
     });
 }
