@@ -17,7 +17,7 @@ In Omarchy, it can replace the default `ALT+TAB` bindings, which use Hyprland's 
 
 Hyprland provides low-level window cycling dispatchers, and some setups, including Omarchy, bind `ALT+TAB` to regular cycling by default. Hyprland tracks focus history, but cycling bindings focus windows immediately, and static bindings cannot keep a visual MRU selection open until `Alt` is released.
 
-This project exists for that gap: it adds the classic MRU Alt-Tab workflow on top of Hyprland with a small external daemon. Windows are ordered by recent focus history: hold `Alt`, press `Tab` multiple times, and focus the selected window only when the modifier is released.
+This project exists for that gap: it adds the classic MRU Alt-Tab workflow on top of Hyprland with a small external daemon. Windows are ordered by recent focus history: hold `Alt`, press `Tab` multiple times, hover a card with the mouse to select it, click a card to switch immediately, or release the modifier to focus the selected item.
 
 ## How To Use It
 

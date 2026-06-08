@@ -32,6 +32,7 @@ const PANEL_MAX_WIDTH: i32 = 1180;
 const PANEL_ITEM_WIDTH: i32 = 172;
 const PANEL_HORIZONTAL_PADDING: i32 = 28;
 const PANEL_HEIGHT: i32 = 154;
+const CURSOR_NO_WARPS_OPTION: &str = "cursor:no_warps";
 const CSS: &str = r#"
 window {
   background: transparent;
@@ -136,6 +137,13 @@ enum IpcCommand {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiUpdate {
+    None,
+    RenderAndPresent,
+    Selection,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OpenRequest {
     profile: Profile,
@@ -227,11 +235,19 @@ struct HyprMonitorInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct HyprIntOption {
+    #[serde(default)]
+    int: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct HyprActiveWindow {
     #[serde(default)]
     address: String,
     #[serde(default)]
     monitor: Option<i64>,
+    #[serde(default)]
+    workspace: HyprWorkspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +260,7 @@ struct WindowInfo {
     monitor: i64,
     focus_history_id: i64,
     pinned: bool,
+    active: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -430,7 +447,7 @@ fn run_daemon() -> Result<()> {
 
         glib::timeout_add_local(Duration::from_millis(12), move || {
             while let Ok(command) = rx.try_recv() {
-                state.borrow_mut().handle(command);
+                handle_command(&state, command);
             }
             state.borrow_mut().close_if_active_modifier_is_up();
             ControlFlow::Continue
@@ -457,12 +474,13 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .borrow()
                 .active_profile
                 .unwrap_or(Profile::Alt);
-            state_pressed
-                .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+            handle_command(
+                &state_pressed,
+                IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Next,
-                }));
+                }),
+            );
             Propagation::Stop
         }
         gdk::Key::Right | gdk::Key::l => {
@@ -470,12 +488,13 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .borrow()
                 .active_profile
                 .unwrap_or(Profile::Alt);
-            state_pressed
-                .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+            handle_command(
+                &state_pressed,
+                IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Next,
-                }));
+                }),
+            );
             Propagation::Stop
         }
         gdk::Key::ISO_Left_Tab => {
@@ -490,12 +509,13 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .borrow()
                 .active_profile
                 .unwrap_or(Profile::Alt);
-            state_pressed
-                .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+            handle_command(
+                &state_pressed,
+                IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Prev,
-                }));
+                }),
+            );
             Propagation::Stop
         }
         gdk::Key::Left | gdk::Key::h | gdk::Key::grave => {
@@ -503,20 +523,21 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
                 .borrow()
                 .active_profile
                 .unwrap_or(Profile::Alt);
-            state_pressed
-                .borrow_mut()
-                .handle(IpcCommand::Open(OpenRequest {
+            handle_command(
+                &state_pressed,
+                IpcCommand::Open(OpenRequest {
                     profile,
                     direction: Direction::Prev,
-                }));
+                }),
+            );
             Propagation::Stop
         }
         gdk::Key::Escape => {
-            state_pressed.borrow_mut().handle(IpcCommand::Cancel);
+            handle_command(&state_pressed, IpcCommand::Cancel);
             Propagation::Stop
         }
         gdk::Key::Return | gdk::Key::KP_Enter => {
-            state_pressed.borrow_mut().handle(IpcCommand::Close);
+            handle_command(&state_pressed, IpcCommand::Close);
             Propagation::Stop
         }
         _ => Propagation::Proceed,
@@ -539,26 +560,128 @@ fn setup_keyboard_controller(window: &gtk::ApplicationWindow, state: Rc<RefCell<
     window.add_controller(controller);
 }
 
+fn handle_command(state: &Rc<RefCell<SwitcherState>>, command: IpcCommand) {
+    let update = state.borrow_mut().handle(command);
+
+    match update {
+        UiUpdate::None => {}
+        UiUpdate::RenderAndPresent => {
+            render_state(state);
+            let switcher = state.borrow();
+            switcher.window.set_keyboard_mode(KeyboardMode::Exclusive);
+            switcher.window.present();
+            switcher.window.grab_focus();
+        }
+        UiUpdate::Selection => refresh_selected_styles(state),
+    }
+}
+
+fn render_state(state: &Rc<RefCell<SwitcherState>>) {
+    let (window, panel, row, items, selected) = {
+        let switcher = state.borrow();
+        (
+            switcher.window.clone(),
+            switcher.panel.clone(),
+            switcher.row.clone(),
+            switcher.items.clone(),
+            switcher.selected,
+        )
+    };
+
+    let width = panel_width(items.len());
+    window.set_default_size(width, PANEL_HEIGHT);
+    window.set_size_request(width, PANEL_HEIGHT);
+    panel.set_size_request(width, PANEL_HEIGHT);
+    clear_row(&row);
+
+    for (idx, item) in items.iter().enumerate() {
+        row.append(&item_card(item, idx == selected, idx, Rc::clone(state)));
+    }
+}
+
+fn activate_item(state: &Rc<RefCell<SwitcherState>>, idx: usize) {
+    let mut switcher = state.borrow_mut();
+    if !switcher.open || idx >= switcher.items.len() {
+        return;
+    }
+
+    switcher.selected = idx;
+    switcher.close(true);
+}
+
+fn select_item(state: &Rc<RefCell<SwitcherState>>, idx: usize) {
+    let changed = {
+        let mut switcher = state.borrow_mut();
+        if !switcher.open || idx >= switcher.items.len() || switcher.selected == idx {
+            false
+        } else {
+            switcher.selected = idx;
+            true
+        }
+    };
+
+    if changed {
+        refresh_selected_styles(state);
+    }
+}
+
+fn refresh_selected_styles(state: &Rc<RefCell<SwitcherState>>) {
+    let (row, selected) = {
+        let switcher = state.borrow();
+        (switcher.row.clone(), switcher.selected)
+    };
+    refresh_selected_card_styles(&row, selected);
+}
+
+fn refresh_selected_card_styles(row: &gtk::Box, selected: usize) {
+    let mut idx = 0;
+    let mut child = row.first_child();
+
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if idx == selected {
+            widget.add_css_class("selected");
+        } else {
+            widget.remove_css_class("selected");
+        }
+        child = next;
+        idx += 1;
+    }
+}
+
+fn clear_row(row: &gtk::Box) {
+    while let Some(child) = row.first_child() {
+        row.remove(&child);
+    }
+}
+
 impl SwitcherState {
-    fn handle(&mut self, command: IpcCommand) {
+    fn handle(&mut self, command: IpcCommand) -> UiUpdate {
         match command {
             IpcCommand::Open(request) => self.open_or_advance(request),
-            IpcCommand::Close => self.close(true),
-            IpcCommand::Cancel => self.close(false),
+            IpcCommand::Close => {
+                self.close(true);
+                UiUpdate::None
+            }
+            IpcCommand::Cancel => {
+                self.close(false);
+                UiUpdate::None
+            }
         }
     }
 
-    fn open_or_advance(&mut self, request: OpenRequest) {
+    fn open_or_advance(&mut self, request: OpenRequest) -> UiUpdate {
         if self.open {
             self.advance(request.direction);
-            self.render();
-            return;
+            return UiUpdate::Selection;
         }
 
         self.config = load_config();
         let settings = self.config.profile(request.profile);
         match collect_items(settings) {
-            Ok(items) if should_open_switcher(settings, items.len()) => {
+            Ok(items)
+                if should_open_switcher(settings, items.len(), only_window_is_active(&items)) =>
+            {
                 let now = Instant::now();
                 self.items = items;
                 self.selected = initial_selection(self.items.len(), request.direction);
@@ -567,15 +690,16 @@ impl SwitcherState {
                 self.modifier_watch_started_at = Some(now);
                 self.modifier_release_misses = 0;
                 self.active_profile = Some(request.profile);
-                self.render();
-                self.window.set_keyboard_mode(KeyboardMode::Exclusive);
-                self.window.present();
-                self.window.grab_focus();
+                UiUpdate::RenderAndPresent
             }
             Ok(_) => {
                 self.ignore_initial_tab_until = None;
+                UiUpdate::None
             }
-            Err(err) => eprintln!("mogtab: failed to collect items: {err:#}"),
+            Err(err) => {
+                eprintln!("mogtab: failed to collect items: {err:#}");
+                UiUpdate::None
+            }
         }
     }
 
@@ -624,7 +748,7 @@ impl SwitcherState {
         self.window.set_visible(false);
 
         let selected = self.items.get(self.selected).cloned();
-        self.clear();
+        clear_row(&self.row);
         self.items.clear();
         self.selected = 0;
 
@@ -658,24 +782,6 @@ impl SwitcherState {
             self.close(true);
         }
     }
-
-    fn render(&self) {
-        self.clear();
-        let width = panel_width(self.items.len());
-        self.window.set_default_size(width, PANEL_HEIGHT);
-        self.window.set_size_request(width, PANEL_HEIGHT);
-        self.panel.set_size_request(width, PANEL_HEIGHT);
-
-        for (idx, item) in self.items.iter().enumerate() {
-            self.row.append(&item_card(item, idx == self.selected));
-        }
-    }
-
-    fn clear(&self) {
-        while let Some(child) = self.row.first_child() {
-            self.row.remove(&child);
-        }
-    }
 }
 
 fn initial_selection(len: usize, direction: Direction) -> usize {
@@ -688,8 +794,17 @@ fn initial_selection(len: usize, direction: Direction) -> usize {
     }
 }
 
-fn should_open_switcher(settings: ProfileSettings, item_count: usize) -> bool {
-    item_count > 0 && (settings.target != Target::Windows || item_count > 1)
+fn should_open_switcher(
+    settings: ProfileSettings,
+    item_count: usize,
+    only_window_is_active: bool,
+) -> bool {
+    item_count > 0
+        && (settings.target != Target::Windows || item_count > 1 || !only_window_is_active)
+}
+
+fn only_window_is_active(items: &[SwitchItem]) -> bool {
+    matches!(items, [SwitchItem::Window(window)] if window.active)
 }
 
 fn should_close_from_modifier_poll(missing_samples: &mut u8, modifier_is_down: bool) -> bool {
@@ -726,12 +841,33 @@ fn panel_width(item_count: usize) -> i32 {
     width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
 }
 
-fn item_card(item: &SwitchItem, selected: bool) -> gtk::Box {
+fn item_card(
+    item: &SwitchItem,
+    selected: bool,
+    idx: usize,
+    state: Rc<RefCell<SwitcherState>>,
+) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("switcher-card");
     if selected {
         card.add_css_class("selected");
     }
+    card.set_cursor_from_name(Some("pointer"));
+
+    let motion = gtk::EventControllerMotion::new();
+    let state_hover = Rc::clone(&state);
+    motion.connect_enter(move |_, _, _| {
+        select_item(&state_hover, idx);
+    });
+    card.add_controller(motion);
+
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    let state_click = Rc::clone(&state);
+    click.connect_pressed(move |_, _, _, _| {
+        activate_item(&state_click, idx);
+    });
+    card.add_controller(click);
 
     let icon = gtk::Image::from_icon_name(item.icon_name());
     icon.add_css_class("switcher-icon");
@@ -976,9 +1112,14 @@ fn collect_windows(settings: ProfileSettings) -> Result<Vec<WindowInfo>> {
     let active: Option<HyprActiveWindow> = hyprctl_json(&["activewindow", "-j"]).ok();
     let active_workspace: Option<HyprActiveWorkspace> =
         hyprctl_json(&["activeworkspace", "-j"]).ok();
+    let monitors: Option<Vec<HyprMonitorInfo>> = hyprctl_json(&["monitors", "-j"]).ok();
     let active_address = active.as_ref().map(|a| a.address.clone());
     let active_workspace_id = active_workspace.as_ref().map(|workspace| workspace.id);
-    let active_monitor_id = current_monitor_id(active.as_ref(), active_workspace.as_ref());
+    let active_monitor_id = current_monitor_id(
+        monitors.as_deref(),
+        active_workspace.as_ref(),
+        active.as_ref(),
+    );
     let active_class = active_address.as_ref().and_then(|active_address| {
         clients
             .iter()
@@ -1005,19 +1146,29 @@ fn collect_windows(settings: ProfileSettings) -> Result<Vec<WindowInfo>> {
                     active_monitor_id,
                 )
         })
-        .map(|client| WindowInfo {
-            address: client.address,
-            title: strip_markup(&client.title),
-            wm_class: resolved_class(client.wm_class, client.initial_class),
-            workspace_id: client.workspace.id,
-            workspace_name: if client.workspace.name.is_empty() {
-                client.workspace.id.to_string()
-            } else {
-                client.workspace.name
-            },
-            monitor: client.monitor,
-            focus_history_id: client.focus_history_id.unwrap_or(999_999),
-            pinned: client.pinned,
+        .map(|client| {
+            let active = client_is_active(
+                active_address.as_deref(),
+                active_workspace_id,
+                active.as_ref(),
+                &client,
+            );
+
+            WindowInfo {
+                address: client.address,
+                title: strip_markup(&client.title),
+                wm_class: resolved_class(client.wm_class, client.initial_class),
+                workspace_id: client.workspace.id,
+                workspace_name: if client.workspace.name.is_empty() {
+                    client.workspace.id.to_string()
+                } else {
+                    client.workspace.name
+                },
+                monitor: client.monitor,
+                focus_history_id: client.focus_history_id.unwrap_or(999_999),
+                pinned: client.pinned,
+                active,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -1028,11 +1179,7 @@ fn collect_windows(settings: ProfileSettings) -> Result<Vec<WindowInfo>> {
             .then_with(|| a.display_name().cmp(&b.display_name()))
     });
 
-    if let Some(active_address) = active_address
-        && let Some(active_index) = windows
-            .iter()
-            .position(|window| window.address == active_address)
-    {
+    if let Some(active_index) = windows.iter().position(|window| window.active) {
         let active = windows.remove(active_index);
         windows.insert(0, active);
     }
@@ -1149,17 +1296,46 @@ fn client_class(client: &HyprClient) -> String {
     }
 }
 
-fn current_monitor_id(
+fn client_is_active(
+    active_address: Option<&str>,
+    active_workspace_id: Option<i64>,
     active: Option<&HyprActiveWindow>,
+    client: &HyprClient,
+) -> bool {
+    if active_address != Some(client.address.as_str()) {
+        return false;
+    }
+
+    let active_workspace_id = active_workspace_id.or_else(|| {
+        active
+            .map(|window| window.workspace.id)
+            .filter(|workspace_id| *workspace_id >= 0)
+    });
+
+    client.pinned
+        || active_workspace_id.is_none_or(|workspace_id| workspace_id == client.workspace.id)
+}
+
+fn current_monitor_id(
+    monitors: Option<&[HyprMonitorInfo]>,
     active_workspace: Option<&HyprActiveWorkspace>,
+    active: Option<&HyprActiveWindow>,
 ) -> Option<i64> {
-    active
-        .and_then(|window| window.monitor.filter(|monitor| *monitor >= 0))
+    monitors
+        .and_then(focused_monitor_id)
         .or_else(|| {
             active_workspace
                 .map(|workspace| workspace.monitor_id)
                 .filter(|monitor| *monitor >= 0)
         })
+        .or_else(|| active.and_then(|window| window.monitor.filter(|monitor| *monitor >= 0)))
+}
+
+fn focused_monitor_id(monitors: &[HyprMonitorInfo]) -> Option<i64> {
+    monitors
+        .iter()
+        .find(|monitor| monitor.focused && !monitor.disabled && monitor.id >= 0)
+        .map(|monitor| monitor.id)
 }
 
 impl Scope {
@@ -1179,11 +1355,29 @@ impl Scope {
 }
 
 fn focus_item(item: &SwitchItem) -> Result<()> {
-    match item {
-        SwitchItem::Window(window) => focus_window(window),
-        SwitchItem::Workspace(workspace) => focus_workspace(workspace.id),
-        SwitchItem::Monitor(monitor) => focus_monitor(&monitor.name),
+    let cursor_no_warps_enabled = cursor_no_warps_enabled().unwrap_or(false);
+    hyprctl_batch(&focus_item_commands(item, cursor_no_warps_enabled))
+}
+
+fn focus_item_commands(item: &SwitchItem, cursor_no_warps_enabled: bool) -> Vec<String> {
+    let mut commands = Vec::new();
+    let should_restore_cursor_warps = !cursor_no_warps_enabled;
+
+    if should_restore_cursor_warps {
+        commands.push(format!("keyword {CURSOR_NO_WARPS_OPTION} 1"));
     }
+
+    match item {
+        SwitchItem::Window(window) => commands.extend(focus_window_commands(window)),
+        SwitchItem::Workspace(workspace) => commands.extend(focus_workspace_commands(workspace.id)),
+        SwitchItem::Monitor(monitor) => commands.extend(focus_monitor_commands(&monitor.name)),
+    }
+
+    if should_restore_cursor_warps {
+        commands.push(format!("keyword {CURSOR_NO_WARPS_OPTION} 0"));
+    }
+
+    commands
 }
 
 fn schedule_focus_item(item: SwitchItem) {
@@ -1194,7 +1388,7 @@ fn schedule_focus_item(item: SwitchItem) {
     });
 }
 
-fn focus_window(window: &WindowInfo) -> Result<()> {
+fn focus_window_commands(window: &WindowInfo) -> Vec<String> {
     let selector = format!("address:{}", window.address);
     let mut commands = Vec::with_capacity(3);
 
@@ -1204,32 +1398,20 @@ fn focus_window(window: &WindowInfo) -> Result<()> {
 
     commands.push(format!("dispatch focuswindow {selector}"));
     commands.push(format!("dispatch alterzorder top,{selector}"));
-    hyprctl_batch(&commands)
+    commands
 }
 
-fn focus_workspace(workspace_id: i64) -> Result<()> {
-    hyprctl(&["dispatch", "workspace", &workspace_id.to_string()])
+fn focus_workspace_commands(workspace_id: i64) -> Vec<String> {
+    vec![format!("dispatch workspace {workspace_id}")]
 }
 
-fn focus_monitor(monitor_name: &str) -> Result<()> {
-    hyprctl(&["dispatch", "focusmonitor", monitor_name])
+fn focus_monitor_commands(monitor_name: &str) -> Vec<String> {
+    vec![format!("dispatch focusmonitor {monitor_name}")]
 }
 
-fn hyprctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("hyprctl")
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run hyprctl {}", args.join(" ")))?;
-
-    if !output.status.success() {
-        bail!(
-            "hyprctl {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    Ok(())
+fn cursor_no_warps_enabled() -> Result<bool> {
+    let option: HyprIntOption = hyprctl_json(&["getoption", CURSOR_NO_WARPS_OPTION, "-j"])?;
+    Ok(option.int != 0)
 }
 
 fn hyprctl_batch(commands: &[String]) -> Result<()> {
@@ -1421,6 +1603,77 @@ fn strip_markup(input: &str) -> String {
 mod tests {
     use super::*;
 
+    fn window_profile_settings() -> ProfileSettings {
+        ProfileSettings {
+            target: Target::Windows,
+            scope: Scope::CurrentMonitor,
+            same_class: false,
+            include_special_workspaces: false,
+            include_empty_workspaces: false,
+        }
+    }
+
+    fn active_window(monitor: Option<i64>, workspace_id: i64) -> HyprActiveWindow {
+        HyprActiveWindow {
+            address: "0x1".to_string(),
+            monitor,
+            workspace: HyprWorkspace {
+                id: workspace_id,
+                name: workspace_id.to_string(),
+            },
+        }
+    }
+
+    fn active_workspace(monitor_id: i64) -> HyprActiveWorkspace {
+        HyprActiveWorkspace { id: 8, monitor_id }
+    }
+
+    fn monitor(id: i64, focused: bool, disabled: bool) -> HyprMonitorInfo {
+        HyprMonitorInfo {
+            id,
+            name: format!("monitor-{id}"),
+            active_workspace: HyprWorkspace {
+                id: id + 1,
+                name: (id + 1).to_string(),
+            },
+            focused,
+            disabled,
+        }
+    }
+
+    fn hypr_client(address: &str, workspace_id: i64, pinned: bool) -> HyprClient {
+        HyprClient {
+            address: address.to_string(),
+            mapped: true,
+            hidden: false,
+            accepts_input: true,
+            workspace: HyprWorkspace {
+                id: workspace_id,
+                name: workspace_id.to_string(),
+            },
+            monitor: 1,
+            wm_class: "code".to_string(),
+            initial_class: String::new(),
+            title: "Code".to_string(),
+            focus_history_id: Some(0),
+            pinned,
+        }
+    }
+
+    fn window_info(address: &str, workspace_id: i64) -> WindowInfo {
+        WindowInfo {
+            address: address.to_string(),
+            title: "Code".to_string(),
+            wm_class: "code".to_string(),
+            workspace_id,
+            workspace_name: workspace_id.to_string(),
+            monitor: 1,
+            focus_history_id: 0,
+            pinned: false,
+            active: false,
+        }
+    }
+
     #[test]
     fn initial_next_selects_previous_mru_window() {
         assert_eq!(initial_selection(0, Direction::Next), 0);
@@ -1435,18 +1688,17 @@ mod tests {
     }
 
     #[test]
-    fn windows_need_a_second_candidate_to_open_switcher() {
-        let settings = ProfileSettings {
-            target: Target::Windows,
-            scope: Scope::CurrentMonitor,
-            same_class: false,
-            include_special_workspaces: false,
-            include_empty_workspaces: false,
-        };
+    fn active_single_window_does_not_open_switcher() {
+        let settings = window_profile_settings();
 
-        assert!(!should_open_switcher(settings, 0));
-        assert!(!should_open_switcher(settings, 1));
-        assert!(should_open_switcher(settings, 2));
+        assert!(!should_open_switcher(settings, 0, false));
+        assert!(!should_open_switcher(settings, 1, true));
+        assert!(should_open_switcher(settings, 2, true));
+    }
+
+    #[test]
+    fn inactive_single_window_can_open_switcher() {
+        assert!(should_open_switcher(window_profile_settings(), 1, false));
     }
 
     #[test]
@@ -1459,8 +1711,8 @@ mod tests {
             include_empty_workspaces: false,
         };
 
-        assert!(!should_open_switcher(settings, 0));
-        assert!(should_open_switcher(settings, 1));
+        assert!(!should_open_switcher(settings, 0, false));
+        assert!(should_open_switcher(settings, 1, false));
     }
 
     #[test]
@@ -1512,6 +1764,57 @@ mod tests {
             PANEL_HORIZONTAL_PADDING + PANEL_ITEM_WIDTH * 3
         );
         assert_eq!(panel_width(50), PANEL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn window_focus_temporarily_disables_cursor_warps() {
+        let item = SwitchItem::Window(window_info("0xabc", 7));
+
+        assert_eq!(
+            focus_item_commands(&item, false),
+            vec![
+                "keyword cursor:no_warps 1",
+                "dispatch workspace 7",
+                "dispatch focuswindow address:0xabc",
+                "dispatch alterzorder top,address:0xabc",
+                "keyword cursor:no_warps 0",
+            ]
+        );
+    }
+
+    #[test]
+    fn focus_keeps_existing_no_warps_setting_enabled() {
+        let item = SwitchItem::Window(window_info("0xabc", 7));
+
+        assert_eq!(
+            focus_item_commands(&item, true),
+            vec![
+                "dispatch workspace 7",
+                "dispatch focuswindow address:0xabc",
+                "dispatch alterzorder top,address:0xabc",
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_focus_also_preserves_cursor_position() {
+        let item = SwitchItem::Workspace(WorkspaceInfo {
+            id: 7,
+            name: "7".to_string(),
+            monitor: 1,
+            windows: 1,
+            last_title: "Code".to_string(),
+            best_focus_history_id: 0,
+        });
+
+        assert_eq!(
+            focus_item_commands(&item, false),
+            vec![
+                "keyword cursor:no_warps 1",
+                "dispatch workspace 7",
+                "keyword cursor:no_warps 0",
+            ]
+        );
     }
 
     #[test]
@@ -1666,54 +1969,63 @@ mod tests {
     }
 
     #[test]
-    fn current_monitor_prefers_active_window_monitor() {
-        let active = HyprActiveWindow {
-            address: "0x1".to_string(),
-            monitor: Some(2),
-        };
-        let active_workspace = HyprActiveWorkspace {
-            id: 8,
-            monitor_id: 1,
-        };
+    fn current_monitor_prefers_focused_monitor() {
+        let monitors = [monitor(2, true, false)];
+        let active = active_window(Some(0), 1);
+        let active_workspace = active_workspace(1);
 
         assert_eq!(
-            current_monitor_id(Some(&active), Some(&active_workspace)),
+            current_monitor_id(Some(&monitors), Some(&active_workspace), Some(&active)),
             Some(2)
         );
     }
 
     #[test]
     fn current_monitor_falls_back_to_active_workspace_monitor() {
-        let active = HyprActiveWindow {
-            address: "0x1".to_string(),
-            monitor: None,
-        };
-        let active_workspace = HyprActiveWorkspace {
-            id: 8,
-            monitor_id: 1,
-        };
+        let active = active_window(None, 8);
+        let active_workspace = active_workspace(1);
 
         assert_eq!(
-            current_monitor_id(Some(&active), Some(&active_workspace)),
+            current_monitor_id(None, Some(&active_workspace), Some(&active)),
             Some(1)
         );
     }
 
     #[test]
-    fn current_monitor_ignores_invalid_active_window_monitor() {
-        let active = HyprActiveWindow {
-            address: "0x1".to_string(),
-            monitor: Some(-1),
-        };
-        let active_workspace = HyprActiveWorkspace {
-            id: 8,
-            monitor_id: 1,
-        };
+    fn current_monitor_falls_back_to_active_window_monitor() {
+        let active = active_window(Some(2), 8);
+
+        assert_eq!(current_monitor_id(None, None, Some(&active)), Some(2));
+    }
+
+    #[test]
+    fn current_monitor_ignores_disabled_focused_monitor() {
+        let monitors = [monitor(2, true, true)];
+        let active_workspace = active_workspace(1);
 
         assert_eq!(
-            current_monitor_id(Some(&active), Some(&active_workspace)),
+            current_monitor_id(Some(&monitors), Some(&active_workspace), None),
             Some(1)
         );
+    }
+
+    #[test]
+    fn active_window_must_be_on_active_workspace() {
+        let active = active_window(Some(1), 7);
+        let client = hypr_client("0x1", 7, false);
+
+        assert!(client_is_active(
+            Some("0x1"),
+            Some(7),
+            Some(&active),
+            &client
+        ));
+        assert!(!client_is_active(
+            Some("0x1"),
+            Some(9),
+            Some(&active),
+            &client
+        ));
     }
 
     #[test]
