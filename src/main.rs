@@ -240,6 +240,14 @@ struct HyprIntOption {
     int: i64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+struct HyprCursorPosition {
+    #[serde(default)]
+    x: i64,
+    #[serde(default)]
+    y: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct HyprActiveWindow {
     #[serde(default)]
@@ -320,6 +328,8 @@ struct SwitcherState {
     ignore_initial_tab_until: Option<Instant>,
     modifier_watch_started_at: Option<Instant>,
     modifier_release_misses: u8,
+    pointer_selection_armed: bool,
+    pointer_open_position: Option<HyprCursorPosition>,
     active_profile: Option<Profile>,
     config: AppConfig,
 }
@@ -439,6 +449,8 @@ fn run_daemon() -> Result<()> {
             ignore_initial_tab_until: None,
             modifier_watch_started_at: None,
             modifier_release_misses: 0,
+            pointer_selection_armed: false,
+            pointer_open_position: None,
             active_profile: None,
             config: load_config(),
         }));
@@ -625,6 +637,29 @@ fn select_item(state: &Rc<RefCell<SwitcherState>>, idx: usize) {
     }
 }
 
+fn select_item_after_pointer_enter(state: &Rc<RefCell<SwitcherState>>, idx: usize) {
+    let (pointer_selection_armed, pointer_open_position) = {
+        let switcher = state.borrow();
+        (
+            switcher.pointer_selection_armed,
+            switcher.pointer_open_position,
+        )
+    };
+
+    if pointer_selection_armed || pointer_moved_since_open(pointer_open_position) {
+        state.borrow_mut().pointer_selection_armed = true;
+        select_item(state, idx);
+    }
+}
+
+fn pointer_moved_since_open(open_position: Option<HyprCursorPosition>) -> bool {
+    open_position.is_none_or(|open_position| {
+        cursor_position()
+            .map(|position| position != open_position)
+            .unwrap_or(true)
+    })
+}
+
 fn refresh_selected_styles(state: &Rc<RefCell<SwitcherState>>) {
     let (row, selected) = {
         let switcher = state.borrow();
@@ -689,6 +724,8 @@ impl SwitcherState {
                 self.ignore_initial_tab_until = Some(now + INITIAL_TAB_SUPPRESSION_GRACE);
                 self.modifier_watch_started_at = Some(now);
                 self.modifier_release_misses = 0;
+                self.pointer_selection_armed = false;
+                self.pointer_open_position = cursor_position().ok();
                 self.active_profile = Some(request.profile);
                 UiUpdate::RenderAndPresent
             }
@@ -742,6 +779,8 @@ impl SwitcherState {
         self.ignore_initial_tab_until = None;
         self.modifier_watch_started_at = None;
         self.modifier_release_misses = 0;
+        self.pointer_selection_armed = false;
+        self.pointer_open_position = None;
         self.active_profile = None;
         self.open = false;
         self.window.set_keyboard_mode(KeyboardMode::None);
@@ -855,9 +894,14 @@ fn item_card(
     card.set_cursor_from_name(Some("pointer"));
 
     let motion = gtk::EventControllerMotion::new();
-    let state_hover = Rc::clone(&state);
+    let state_enter = Rc::clone(&state);
     motion.connect_enter(move |_, _, _| {
-        select_item(&state_hover, idx);
+        select_item_after_pointer_enter(&state_enter, idx);
+    });
+    let state_motion = Rc::clone(&state);
+    motion.connect_motion(move |_, _, _| {
+        state_motion.borrow_mut().pointer_selection_armed = true;
+        select_item(&state_motion, idx);
     });
     card.add_controller(motion);
 
@@ -1412,6 +1456,10 @@ fn focus_monitor_commands(monitor_name: &str) -> Vec<String> {
 fn cursor_no_warps_enabled() -> Result<bool> {
     let option: HyprIntOption = hyprctl_json(&["getoption", CURSOR_NO_WARPS_OPTION, "-j"])?;
     Ok(option.int != 0)
+}
+
+fn cursor_position() -> Result<HyprCursorPosition> {
+    hyprctl_json(&["cursorpos", "-j"])
 }
 
 fn hyprctl_batch(commands: &[String]) -> Result<()> {
